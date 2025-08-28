@@ -144,13 +144,13 @@ Below is the end‑to‑end pipeline the app runs after you click **Calculate**.
 flowchart TD
     A[User uploads soil and land use data] --> B[Validate uploads]
     B --> C[Load layers and CN lookup]
-    C --> D[Preprocess soil<br/>(CRS fix, dual-group replacements)]
-    C --> E[Preprocess land use<br/>(CRS fix, code casting)]
-    D --> F[Spatial intersection<br/>(soil ∩ land use)]
+    C --> D[Preprocess soil: CRS fix, dual-group replacements]
+    C --> E[Preprocess land use: CRS fix, code casting]
+    D --> F[Spatial intersection (soil ∩ land use)]
     E --> F
-    F --> G[Assign Curve Numbers<br/>(lookup by LU code + soil group)]
+    F --> G[Assign Curve Numbers (lookup by LU code + soil group)]
     G --> H[Dissolve by CN and compute area_ha]
-    H --> I[Create CN raster<br/>(cell size, CRS-aware)]
+    H --> I[Create CN raster (cell size, CRS-aware)]
     I --> J[Global statistics from polygons]
     I --> K{Watersheds provided?}
     K -- Yes --> L[Zonal statistics per watershed]
@@ -186,7 +186,7 @@ This software is provided **as is**, without warranty of any kind. The developer
 
 ---
 
-## Acknowledgments
+## References 
 
 - USDA NRCS SCS Curve Number method
 - USACE HEC‑HMS guidance for CN grids
