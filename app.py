@@ -483,4 +483,5 @@ def create_interface():
 # Launch the app
 if __name__ == "__main__":
     demo = create_interface()
-    demo.launch(server_name="127.0.0.1", server_port=7860, share=True, ssr_mode=False)
+    #demo.launch(server_name="127.0.0.1", server_port=7860, share=True, ssr_mode=False)
+    demo.launch(share=True, ssr_mode=False)
