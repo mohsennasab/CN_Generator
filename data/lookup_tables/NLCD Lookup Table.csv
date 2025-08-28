@@ -1,0 +1,16 @@
+﻿LUValue,Class,A,B,C,D
+11,Open Water,98,98,98,98
+21,"Developed, Open Space",49,69,79,84
+22,"Developed, Low Intensity",57,72,81,86
+23,"Developed, Medium Intensity",61,75,83,87
+24,Developed High Intensity,81,88,91,93
+31,Barren Land (Rock/Sand/Clay),78,86,91,93
+41,Deciduous Forest,45,66,77,83
+42,Evergreen Forest,25,55,70,77
+43,Mixed Forest,36,60,73,79
+52,Shrub/Scrub,55,72,81,86
+71,Grassland/Herbaceous,50,69,79,84
+81,Pasture/Hay,49,69,79,84
+82,Cultivated Crops,67,78,85,89
+90,Woody Wetlands,30,58,71,78
+95,Emergent Herbaceous Wetlands,30,58,71,78
