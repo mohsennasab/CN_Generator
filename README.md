@@ -146,7 +146,7 @@ flowchart TD
     B --> C[Load layers and CN lookup]
     C --> D[Preprocess soil: CRS fix, dual-group replacements]
     C --> E[Preprocess land use: CRS fix, code casting]
-    D --> F[Spatial intersection (soil ∩ land use)]
+    D --> F[Spatial intersection (soil and land use)]
     E --> F
     F --> G[Assign Curve Numbers (lookup by LU code + soil group)]
     G --> H[Dissolve by CN and compute area_ha]
@@ -158,6 +158,7 @@ flowchart TD
     J --> N[Generate HTML report]
     L --> N
     N --> O[Interactive map + downloads]
+
 ```
 
 ---
