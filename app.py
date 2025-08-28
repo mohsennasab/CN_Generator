@@ -18,7 +18,7 @@ import shutil
 
 # Default configuration
 DEFAULT_CRS = "EPSG:4326"
-DEFAULT_CELL_SIZE = 30  # meters
+DEFAULT_CELL_SIZE = 10  # meters
 
 def validate_shapefile_upload(file):
     """Validate that a shapefile upload contains required components."""
@@ -141,13 +141,18 @@ def process_curve_numbers(
                 return None, None, None, None, "Please provide a lookup table or enable NLCD option"
             lookup_df = calc.load_lookup_table(lookup_path=lookup_file.name)
         
-        # Preprocess data
+        # Preprocess data and track missing hydrogroup values
         print("Preprocessing data...")
         replacements = {
             'A/D': replacement_ad,
             'B/D': replacement_bd,
             'C/D': replacement_cd
         }
+        
+        # Count missing hydrogroup values before preprocessing
+        original_soil_gdf = soil_gdf.copy()
+        valid_groups = ['A', 'B', 'C', 'D', 'A/D', 'B/D', 'C/D']
+        missing_hydrogroup_count = (~original_soil_gdf[hydgrp_field].isin(valid_groups)).sum()
         
         soil_gdf = calc.preprocess_soil_data(soil_gdf, hydgrp_field, replacements)
         landuse_gdf = calc.preprocess_landuse_data(landuse_gdf, code_field)
@@ -175,6 +180,8 @@ def process_curve_numbers(
         
         # Calculate statistics
         global_stats = CNStatistics.calculate_global_stats(dissolved_gdf)
+        # Add missing hydrogroup count to stats
+        global_stats['missing_hydrogroup_count'] = missing_hydrogroup_count
         
         # Process watersheds if provided
         watershed_stats_df = None
@@ -192,7 +199,9 @@ def process_curve_numbers(
                 print(f"Warning: Could not process watershed file: {str(e)}")
         
         # Create visualizations - now returns HTML for leafmap
-        map_html = CNVisualization.create_leafmap(dissolved_gdf, raster_path, watershed_gdf)
+        map_html = CNVisualization.create_leafmap(
+            dissolved_gdf, raster_path, watershed_gdf, watershed_field, watershed_stats_df
+        )
         
         # Create summary report
         report_html = CNVisualization.create_summary_report(
@@ -222,24 +231,29 @@ def process_curve_numbers(
 def create_interface():
     css = """
     body {font-family: Arial, sans-serif;}
+    
     .map-container {
         height: 800px !important;
         overflow: hidden;
     }
+    
     .coffee-button {
         position: fixed;
         top: 20px;
         right: 20px;
-        z-index: 9999;
+        z-index: 999;
         border-radius: 10px;
         transition: transform 0.2s;
     }
+    
     .coffee-button:hover {
         transform: scale(1.05);
     }
+    
     .coffee-button img {
         border-radius: 10px;
     }
+    
     .developer-info {
         text-align: center;
         margin-top: 20px;
@@ -249,13 +263,47 @@ def create_interface():
         border-radius: 10px;
         border: none;
     }
+    
     .developer-info a {
         color: #FFE701 !important;
         text-decoration: none;
         font-weight: bold;
     }
+    
     .developer-info a:hover {
         text-decoration: underline;
+    }
+    
+    .how-to-use {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 20px;
+        border-radius: 10px;
+        margin: 20px 0;
+    }
+    
+    .how-to-use h3 {
+        color: #FFE701;
+        margin-top: 0;
+        border-bottom: 2px solid #FFE701;
+        padding-bottom: 10px;
+    }
+    
+    .how-to-use ul {
+        padding-left: 20px;
+    }
+    
+    .how-to-use li {
+        margin-bottom: 8px;
+        line-height: 1.4;
+    }
+    
+    .disclaimer {
+        margin-top: 15px;
+        padding: 15px;
+        background: rgba(255,231,1,0.2);
+        border-radius: 8px;
+        border: 1px solid #FFE701;
     }
     """
     
@@ -274,25 +322,40 @@ def create_interface():
         gr.HTML(coffee_html)
         
         gr.Markdown("""
-        # SCS Curve Number Generator
+        # 🟦🟥🟩🟨 SCS Curve Number Generator 🟦🟥🟩🟨 
         
         Calculate **SCS (Soil Conservation Service) Curve Numbers** for watershed runoff estimation using open-source geospatial tools.
-        
-        ## How to Use:
-        1. Upload your **soil** and **land use** shapefiles (zip files)
-        2. Configure field mappings and parameters  
-        3. Optionally add watershed boundaries for zonal statistics (zip file)
-        4. Click **Calculate** to generate curve numbers
-        
-        **Shapefile Upload Requirements:**
-        For shapefiles, ensure you upload ALL required components:
-        - `.shp` (geometry), `.shx` (index), `.dbf` (attributes), `.prj` (projection)
-        - Upload shapefiles as a ZIP archive containing all components for best results
-                    
-        **This app is provided as-is. The developer is not responsible for any claims or issues that may arise from its use. Please verify the results for accuracy before relying on them.**
-        
-        ---
         """)
+        
+        # Add How to Use section directly in markdown
+        gr.HTML('''
+        <div class="how-to-use">
+            <h3>How to Use</h3>
+            <ol>
+                <li><strong>Upload your soil and land use shapefiles</strong> (zip files)</li>
+                <li><strong>Configure field mappings</strong> and parameters</li>
+                <li><strong>Optionally add watershed boundaries</strong> for zonal statistics (zip file)</li>
+                <li><strong>Click Calculate</strong> to generate curve numbers</li>
+            </ol>
+            
+            <h3>Shapefile Upload Requirements</h3>
+            <p>For shapefiles, ensure you upload ALL required components:</p>
+            <ul>
+                <li><code>.shp</code> (geometry)</li>
+                <li><code>.shx</code> (index)</li>
+                <li><code>.dbf</code> (attributes)</li>
+                <li><code>.prj</code> (projection)</li>
+            </ul>
+            <p><strong>Tip:</strong> Upload shapefiles as a ZIP archive containing all components for best results</p>
+            
+            <div class="disclaimer">
+                <strong>⚠️ Disclaimer:</strong><br>
+                This app is provided as-is. The developer is not responsible for any claims or issues that may arise from its use. Please verify the results for accuracy before relying on them.
+            </div>
+        </div>
+        ''')
+        
+        gr.Markdown("---")
         
         with gr.Row():
             with gr.Column(scale=1):
@@ -313,13 +376,13 @@ def create_interface():
                 hydgrp_field = gr.Textbox(
                     label="Soil Hydrologic Group Field",
                     value="hydgrpdcd",
-                    info="Field containing A, B, C, D soil groups"
+                    info="Field containing A, B, C, D soil groups (case sensitive)"
                 )
                 
                 code_field = gr.Textbox(
                     label="Land Use Code Field",
                     value="gridcode",
-                    info="Field containing numeric land use codes"
+                    info="Field containing numeric land use codes (case sensitive)"
                 )
                 
                 gr.Markdown("### Lookup Table")
@@ -389,7 +452,7 @@ def create_interface():
                 watershed_field = gr.Textbox(
                     label="Watershed Name/ID Field",
                     placeholder="e.g., name, huc_id",
-                    info="Field containing watershed identifiers"
+                    info="Field containing watershed identifiers (case sensitive)"
                 )
                 
                 use_parallel = gr.Checkbox(
@@ -408,10 +471,10 @@ def create_interface():
             raster_output = gr.File(label="CN Raster (GeoTIFF)")
             watershed_excel_output = gr.File(label="Watershed Statistics (Excel)", visible=False)
         
-        # MOVED: Report above map
+        # Report above map
         report_output = gr.HTML(label="Analysis Report")
         
-        # MOVED: Map with increased height
+        # Map with increased height
         map_output = gr.HTML(label="Interactive Map", elem_classes="map-container")
         
         def update_outputs(*args):

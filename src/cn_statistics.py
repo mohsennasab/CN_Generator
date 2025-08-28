@@ -48,8 +48,8 @@ class CNStatistics:
                 'unique_values': len(valid_cn.unique())
             }
             
-            # Add distribution percentiles
-            percentiles = [10, 25, 50, 75, 90]
+            # Add distribution percentiles (excluding 10 and 75 as requested)
+            percentiles = [25, 50, 90]
             for p in percentiles:
                 stats[f'percentile_{p}'] = np.percentile(valid_cn, p)
         else:
