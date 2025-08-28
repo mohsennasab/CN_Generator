@@ -142,22 +142,22 @@ Below is the end‑to‑end pipeline the app runs after you click **Calculate**.
 
 ```mermaid
 flowchart TD
-    A[User uploads soil and land use data] --> B[Validate uploads]
+    A[Upload soil and land use data] --> B[Validate uploads]
     B --> C[Load layers and CN lookup]
-    C --> D[Preprocess soil: CRS fix, dual-group replacements]
-    C --> E[Preprocess land use: CRS fix, code casting]
-    D --> F[Spatial intersection (soil and land use)]
+    C --> D[Preprocess soil: CRS fix and dual group replacements]
+    C --> E[Preprocess land use: CRS fix and code casting]
+    D --> F[Spatial intersection of soil and land use]
     E --> F
-    F --> G[Assign Curve Numbers (lookup by LU code + soil group)]
+    F --> G[Assign Curve Numbers using lookup table]
     G --> H[Dissolve by CN and compute area_ha]
-    H --> I[Create CN raster (cell size, CRS-aware)]
-    I --> J[Global statistics from polygons]
-    I --> K{Watersheds provided?}
-    K -- Yes --> L[Zonal statistics per watershed]
-    K -- No --> M[Skip zonal stats]
+    H --> I[Create CN raster with cell size and CRS-aware handling]
+    I --> J[Compute global statistics]
+    I --> K{Watersheds provided}
+    K -- Yes --> L[Compute zonal statistics per watershed]
+    K -- No --> M[Skip zonal statistics]
     J --> N[Generate HTML report]
     L --> N
-    N --> O[Interactive map + downloads]
+    N --> O[Interactive map and downloads]
 
 ```
 
