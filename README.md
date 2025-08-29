@@ -14,8 +14,7 @@ pinned: false
 
 A simple, open-source tool for creating SCS Curve Number (CN) maps and summary statistics from **soil** and **land use** data. The app includes an optional watershed analysis for zonal statistics and an interactive map.
 
-> **Live demo:** *(placeholder)* > **Hugging Face Space:** https://huggingface.co/spaces/YOUR-USERNAME/YOUR-SPACE
-
+> **Live demo:** *(placeholder)* > **Hugging Face Space:** https://huggingface.co/spaces/mohsennasab/CN_Generator
 ---
 
 ## Features
