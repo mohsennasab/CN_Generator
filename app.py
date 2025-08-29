@@ -15,6 +15,7 @@ from src.visualization import CNVisualization
 import json
 import zipfile
 import shutil
+import time
 
 # Default configuration
 DEFAULT_CRS = "EPSG:4326"
@@ -64,22 +65,6 @@ def validate_shapefile_upload(file):
     except Exception as e:
         return False, f"Error validating file: {str(e)}"
 
-def create_excel_output(watershed_stats_df):
-    """Create Excel file from watershed statistics."""
-    if watershed_stats_df is None or watershed_stats_df.empty:
-        return None
-    
-    excel_filename = f"watershed_statistics_{os.getpid()}_{hash(str(watershed_stats_df.iloc[0].name) if len(watershed_stats_df) > 0 else 'empty')}.xlsx"
-    excel_path = os.path.join(tempfile.gettempdir(), excel_filename)
-    
-    try:
-        watershed_stats_df.to_excel(excel_path, index=False, engine='openpyxl')
-        print(f"Created Excel output: {excel_path}")
-        return excel_path
-    except Exception as e:
-        print(f"Error creating Excel file: {str(e)}")
-        return None
-
 def process_curve_numbers(
     soil_file,
     landuse_file,
@@ -98,12 +83,14 @@ def process_curve_numbers(
 ):
     """Main processing function for Gradio interface."""
     
+    start_time = time.time()
+    
     try:
         # Validate inputs
         if soil_file is None:
-            return None, None, None, None, "Please upload a soil shapefile"
+            return None, None, None, None, "Please upload a soil shapefile", ""
         if landuse_file is None:
-            return None, None, None, None, "Please upload a land use shapefile"
+            return None, None, None, None, "Please upload a land use shapefile", ""
             
         # Validate shapefile uploads (only show warnings, don't block processing)
         soil_valid, soil_msg = validate_shapefile_upload(soil_file)
@@ -126,19 +113,19 @@ def process_curve_numbers(
         try:
             soil_gdf = gpd.read_file(soil_file.name)
         except Exception as e:
-            return None, None, None, None, f"Error reading soil file: {str(e)}"
+            return None, None, None, None, f"Error reading soil file: {str(e)}", ""
             
         try:
             landuse_gdf = gpd.read_file(landuse_file.name)
         except Exception as e:
-            return None, None, None, None, f"Error reading land use file: {str(e)}"
+            return None, None, None, None, f"Error reading land use file: {str(e)}", ""
         
         # Load lookup table
         if use_nlcd:
             lookup_df = calc.load_lookup_table(use_nlcd=True)
         else:
             if lookup_file is None:
-                return None, None, None, None, "Please provide a lookup table or enable NLCD option"
+                return None, None, None, None, "Please provide a lookup table or enable NLCD option", ""
             lookup_df = calc.load_lookup_table(lookup_path=lookup_file.name)
         
         # Preprocess data and track missing hydrogroup values
@@ -193,8 +180,8 @@ def process_curve_numbers(
                 watershed_stats_df = CNStatistics.calculate_zonal_statistics(
                     raster_path, watershed_gdf, watershed_field
                 )
-                # Create Excel output for watershed statistics
-                excel_output = create_excel_output(watershed_stats_df)
+                # CSV download is handled in visualization.py
+                excel_output = None
             except Exception as e:
                 print(f"Warning: Could not process watershed file: {str(e)}")
         
@@ -220,12 +207,20 @@ def process_curve_numbers(
             print(f"Error saving vector file: {str(e)}")
             vector_path = None
         
-        return vector_path, raster_path, report_html, map_html, excel_output
+        # Calculate total processing time
+        end_time = time.time()
+        processing_time = end_time - start_time
+        time_display = f"Processing completed in {processing_time:.1f} seconds"
+        
+        return vector_path, raster_path, report_html, map_html, excel_output, time_display
         
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return None, None, None, f"Error: {str(e)}", None
+        end_time = time.time()
+        processing_time = end_time - start_time
+        error_display = f"Error occurred after {processing_time:.1f} seconds: {str(e)}"
+        return None, None, None, f"Error: {str(e)}", None, error_display
 
 # Create Gradio interface
 def create_interface():
@@ -304,6 +299,25 @@ def create_interface():
         background: rgba(255,231,1,0.2);
         border-radius: 8px;
         border: 1px solid #FFE701;
+    }
+    
+    .processing-status {
+        text-align: center;
+        padding: 10px;
+        margin: 10px 0;
+        background: linear-gradient(135deg, #17a2b8, #138496);
+        color: white;
+        border-radius: 5px;
+        font-weight: bold;
+        font-size: 14px;
+    }
+    
+    .processing-complete {
+        background: linear-gradient(135deg, #28a745, #20c997);
+    }
+    
+    .processing-error {
+        background: linear-gradient(135deg, #dc3545, #c82333);
     }
     """
     
@@ -463,33 +477,55 @@ def create_interface():
         
         calculate_btn = gr.Button("Calculate Curve Numbers", variant="primary", size="lg")
         
+        # Processing status display
+        status_display = gr.HTML(visible=False, elem_classes="processing-status")
+        
         gr.Markdown("---")
         gr.Markdown("### Outputs")
         
         with gr.Row():
-            vector_output = gr.File(label="CN Polygons (GeoPackage)")
-            raster_output = gr.File(label="CN Raster (GeoTIFF)")
+            vector_output = gr.File(label="CN Polygons (GeoPackage)", visible=False)
+            raster_output = gr.File(label="CN Raster (GeoTIFF)", visible=False)
             watershed_excel_output = gr.File(label="Watershed Statistics (Excel)", visible=False)
         
         # Report above map
-        report_output = gr.HTML(label="Analysis Report")
+        report_output = gr.HTML(label="Analysis Report", visible=False)
         
         # Map with increased height
-        map_output = gr.HTML(label="Interactive Map", elem_classes="map-container")
+        map_output = gr.HTML(label="Interactive Map", elem_classes="map-container", visible=False)
         
         def update_outputs(*args):
+            # Show processing status
+            yield (
+                gr.update(),  # vector_output
+                gr.update(),  # raster_output  
+                gr.update(),  # report_output
+                gr.update(),  # map_output
+                gr.update(),  # watershed_excel_output
+                gr.update(value='<div class="processing-status">Processing... Please wait</div>', visible=True)  # status
+            )
+            
+            # Run the actual processing
             results = process_curve_numbers(*args)
-            vector_path, raster_path, report_html, map_html, excel_path = results
+            vector_path, raster_path, report_html, map_html, excel_path, time_display = results
             
             # Show/hide Excel output based on whether watersheds were processed
             excel_visible = excel_path is not None
             
-            return (
-                vector_path, 
-                raster_path, 
-                report_html, 
-                map_html, 
-                gr.update(value=excel_path, visible=excel_visible)
+            # Determine status class based on results
+            if vector_path is not None:
+                status_class = "processing-status processing-complete"
+            else:
+                status_class = "processing-status processing-error"
+            
+            # Return final results
+            yield (
+                gr.update(value=vector_path, visible=True), 
+                gr.update(value=raster_path, visible=True), 
+                gr.update(value=report_html, visible=True), 
+                gr.update(value=map_html, visible=True), 
+                gr.update(value=excel_path, visible=excel_visible),
+                gr.update(value=f'<div class="{status_class}">{time_display}</div>', visible=True)
             )
         
         calculate_btn.click(
@@ -501,34 +537,33 @@ def create_interface():
                 watershed_file, watershed_field, use_parallel
             ],
             outputs=[
-                vector_output, raster_output, report_output, map_output, watershed_excel_output
+                vector_output, raster_output, report_output, map_output, watershed_excel_output, status_display
             ]
         )
         
         gr.Markdown("""
         ---
-        ### About SCS Curve Numbers
-        
-        The SCS Curve Number method estimates direct runoff from rainfall events based on:
-        - **Hydrologic Soil Groups (A-D)**: Soil infiltration capacity
-        - **Land Use/Land Cover**: Surface conditions affecting runoff
-        - **Antecedent Moisture Conditions**: Soil wetness before rainfall
-        
-        **CN Values Range**: 30 (low runoff) to 100 (impervious)
-        
-        ### Technical Details
-        
-        This tool uses open-source geospatial libraries including:
-        - **GeoPandas** for vector operations
-        - **Rasterio** for raster processing  
-        - **RasterStats** for zonal statistics
-        - **Folium** for interactive mapping
-        
-        ### References
-        - [USDA Technical Release 55](https://www.nrcs.usda.gov/wps/portal/nrcs/detailfull/national/water/manage/hydrology/)
-        - [National Land Cover Database](https://www.mrlc.gov/)
-        - [HEC-HMS Creating Curve Number Grid Guide](https://www.hec.usace.army.mil/confluence/hmsdocs/hmsguides/gis-tools-and-terrain-data/gis-tutorials-and-guides/creating-a-curve-number-grid-and-computing-subbasin-average-curve-number-values)
-        - [Soil Data - SSURGO Downloader](https://www.arcgis.com/apps/View/index.html?appid=cdc49bd63ea54dd2977f3f2853e07fff)         
+        ### 📘 About SCS Curve Numbers
+
+        The SCS Curve Number method is a widely used approach to estimate direct runoff from rainfall events. It considers:
+
+        - **🌱 Hydrologic Soil Groups (A-D)**: Soil infiltration capacity
+        - **🌲 Land Use/Land Cover**: Surface conditions affecting runoff 
+        - **💧 Antecedent Moisture**: Soil wetness before rainfall
+
+        **CN Values**: Range from 30 (low runoff) to 100 (impervious surfaces)
+
+        ### 📚 Helpful Resources
+
+        **ArcGIS Pro Tutorial**  
+        Learn how to calculate CN in ArcGIS Pro:
+        - [Create Curve Number CN Raster Using ArcHydro Tools](https://www.hydromohsen.com/create-curve-number-cn-raster-for-a-watershed)
+
+        ### 📝 References
+        - [USDA Technical Release 55](https://www.nrcs.usda.gov/wps/portal/nrcs/detailfull/national/water/manage/hydrology/) - Official documentation
+        - [National Land Cover Database](https://www.mrlc.gov/) - Land cover data
+        - [HEC-HMS CN Grid Guide](https://www.hec.usace.army.mil/confluence/hmsdocs/hmsguides/gis-tools-and-terrain-data/gis-tutorials-and-guides/creating-a-curve-number-grid-and-computing-subbasin-average-curve-number-values) - Technical guide
+        - [SSURGO Soil Data Downloader](https://www.arcgis.com/apps/View/index.html?appid=cdc49bd63ea54dd2977f3f2853e07fff) - Soil data source
         """)
         
         # Developer information
