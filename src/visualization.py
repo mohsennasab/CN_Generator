@@ -15,6 +15,7 @@ import folium
 import tempfile
 import os
 import branca.colormap as cm
+import json
 
 def get_file_as_base64(file_path):
     """Convert file to base64 for inline download."""
@@ -34,6 +35,33 @@ def create_csv_download_link(df, filename="watershed_statistics.csv"):
         return csv_b64, filename
     except:
         return None, None
+
+def clean_gdf_for_folium(gdf, keep_columns=None):
+    """Clean GeoDataFrame for Folium visualization by removing problematic columns."""
+    if keep_columns is None:
+        keep_columns = ['geometry']
+        # Keep only numeric/string columns that aren't datetime
+        for col in gdf.columns:
+            if col != 'geometry':
+                col_type = str(gdf[col].dtype).lower()
+                if not any(x in col_type for x in ['datetime', 'timestamp', 'period']):
+                    keep_columns.append(col)
+    
+    # Only keep columns that exist in the GeoDataFrame
+    keep_columns = [col for col in keep_columns if col in gdf.columns]
+    clean_gdf = gdf[keep_columns].copy()
+    
+    # Convert any remaining problematic columns to strings
+    for col in clean_gdf.columns:
+        if col != 'geometry':
+            try:
+                # Test if column can be JSON serialized
+                if len(clean_gdf) > 0:
+                    json.dumps(clean_gdf[col].iloc[0], default=str)
+            except (TypeError, ValueError):
+                clean_gdf[col] = clean_gdf[col].astype(str)
+    
+    return clean_gdf
 
 class CNVisualization:
     """Create visualizations for Curve Number analysis."""
@@ -131,9 +159,12 @@ class CNVisualization:
         # Create FeatureGroup for CN polygons with layer control
         cn_layer = folium.FeatureGroup(name='CN Polygons', control=True, show=True)
         
+        # Clean the GeoDataFrame to remove non-JSON serializable columns
+        cn_gdf_clean = clean_gdf_for_folium(cn_gdf, ['geometry', 'CN'])
+        
         # Remove area_ha from tooltip as it's showing 0
         folium.GeoJson(
-            cn_gdf,
+            cn_gdf_clean,
             style_function=style_function,
             highlight_function=highlight_function,
             tooltip=folium.GeoJsonTooltip(
@@ -170,9 +201,12 @@ class CNVisualization:
                     'dashArray': '5, 5'
                 }
             
+            # Clean watershed GeoDataFrame
+            watershed_clean = clean_gdf_for_folium(watershed_gdf, ['geometry', watershed_field])
+            
             # Add watershed polygons
             folium.GeoJson(
-                watershed_gdf,
+                watershed_clean,
                 style_function=watershed_style,
                 tooltip=folium.GeoJsonTooltip(
                     fields=[watershed_field],
