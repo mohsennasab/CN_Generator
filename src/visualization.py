@@ -371,17 +371,17 @@ class CNVisualization:
                 body { 
                     font-family: Arial, sans-serif; 
                     margin: 20px; 
-                    background-color: var(--background-fill-primary);
+                    background-color: transparent;
                     color: var(--body-text-color);
                 }
                 h1 { 
-                    color: #2c3e50; 
+                    color: var(--body-text-color); 
                     text-align: center;
                     margin-bottom: 30px;
                 }
                 h2 { 
-                    color: #34495e; 
-                    border-bottom: 2px solid #3498db; 
+                    color: var(--body-text-color); 
+                    border-bottom: 1px solid var(--border-color-primary); 
                     padding-bottom: 10px; 
                     margin-top: 30px;
                 }
@@ -392,35 +392,37 @@ class CNVisualization:
                     box-shadow: 0 2px 8px rgba(0,0,0,0.1);
                 }
                 th, td { 
-                    border: 1px solid #ddd; 
+                    border: 1px solid var(--border-color-primary); 
                     padding: 12px; 
                     text-align: left; 
                 }
                 th { 
-                    background-color: #3498db; 
-                    color: white; 
+                    background-color: var(--button-primary-background-fill, #2f766d); 
+                    color: var(--button-primary-text-color, #ffffff); 
                     font-weight: bold;
                 }
                 tr:nth-child(even) { 
-                    background-color: rgba(52, 152, 219, 0.1); 
+                    background-color: var(--input-background-fill); 
                 }
                 tr:hover {
-                    background-color: rgba(52, 152, 219, 0.2);
+                    background-color: var(--block-background-fill);
                 }
                 .stat-box { 
                     display: inline-block; 
                     padding: 12px 16px; 
                     margin: 8px;
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                    color: white;
-                    border-radius: 10px;
+                    background: var(--block-background-fill); 
+                    color: var(--body-text-color);
+                    border: 1px solid var(--border-color-primary);
+                    border-radius: 8px;
                     font-weight: 600;
-                    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
                     min-width: 120px;
                     text-align: center;
                 }
                 .stat-box.warning { 
-                    background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%); 
+                    background: var(--block-background-fill);
+                    border-color: var(--error-border-color, var(--border-color-primary));
+                    color: var(--body-text-color);
                 }
                 .stats-container {
                     display: flex;
@@ -431,27 +433,26 @@ class CNVisualization:
                 }
                 .footnote {
                     font-size: 12px;
-                    color: #666;
+                    color: var(--body-text-color-subdued, var(--body-text-color));
                     margin-top: 10px;
                     font-style: italic;
                 }
                 .download-button {
                     display: inline-block;
-                    background: linear-gradient(135deg, #28a745, #20c997);
-                    color: white !important;
+                    background: var(--button-primary-background-fill, #2f766d);
+                    color: var(--button-primary-text-color, #ffffff) !important;
                     padding: 8px 16px;
                     text-decoration: none;
-                    border-radius: 5px;
+                    border-radius: 6px;
                     font-weight: bold;
                     margin-left: 15px;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
                     transition: transform 0.2s;
                     font-size: 14px;
                 }
                 .download-button:hover {
                     transform: translateY(-2px);
                     text-decoration: none;
-                    color: white !important;
+                    color: var(--button-primary-text-color, #ffffff) !important;
                 }
                 .section-header {
                     display: flex;
@@ -469,11 +470,22 @@ class CNVisualization:
         html += '<div class="stats-container">'
         
         # Define which statistics to exclude
-        excluded_stats = {'percentile_10', 'percentile_75', 'count', 'missing_hydrogroup_count'}
+        excluded_stats = {'percentile_10', 'percentile_75', 'count', 'unique_values', 'missing_hydrogroup_count'}
+        labels = {
+            'min': 'Minimum CN',
+            'max': 'Maximum CN',
+            'mean': 'Mean CN',
+            'weighted_mean': 'Weighted Mean CN',
+            'median': 'Median CN',
+            'std': 'Std. Dev.',
+            'percentile_25': '25th Percentile',
+            'percentile_50': '50th Percentile',
+            'percentile_90': '90th Percentile',
+        }
         
         for key, value in stats.items():
             if key not in excluded_stats and isinstance(value, (int, float)):
-                display_key = key.replace("_", " ").title()
+                display_key = labels.get(key, key.replace("_", " ").title())
                 html += f'<div class="stat-box"><strong>{display_key}</strong><br>{value:.2f}</div>'
         
         # Add missing hydrogroup count in red if > 0
@@ -487,12 +499,27 @@ class CNVisualization:
         
         # Add warning footnote if there are missing hydrogroups
         if 'missing_hydrogroup_count' in stats and stats['missing_hydrogroup_count'] > 0:
-            html += f'<div class="footnote" style="color: #e74c3c; font-weight: bold;">** {stats["missing_hydrogroup_count"]} soil polygons have missing or invalid hydrologic group values and were excluded from analysis.</div>'
+            html += f'<div class="footnote" style="font-weight: bold;">** {stats["missing_hydrogroup_count"]} soil polygons have missing or invalid hydrologic group values and were excluded from analysis.</div>'
         
         # Watershed Statistics (if provided)
         if watershed_stats is not None and not watershed_stats.empty:
+            display_columns = [
+                col for col in [watershed_stats.columns[0], 'mean', 'min', 'max', 'median', 'std', 'cv', 'range']
+                if col in watershed_stats.columns
+            ]
+            report_stats = watershed_stats[display_columns].copy()
+            report_stats = report_stats.rename(columns={
+                'mean': 'Mean CN',
+                'min': 'Minimum CN',
+                'max': 'Maximum CN',
+                'median': 'Median CN',
+                'std': 'Std. Dev.',
+                'cv': 'Coeff. Variation (%)',
+                'range': 'CN Range',
+            })
+
             # Create CSV download
-            csv_b64, csv_filename = create_csv_download_link(watershed_stats, "watershed_statistics.csv")
+            csv_b64, csv_filename = create_csv_download_link(report_stats, "watershed_statistics.csv")
             
             # Header with download button
             html += '<div class="section-header">'
@@ -502,14 +529,14 @@ class CNVisualization:
                 html += f'''
                 <a href="data:text/csv;base64,{csv_b64}" 
                    download="{csv_filename}" class="download-button">
-                   Download Complete CSV ({len(watershed_stats)} rows)
+                   Download Complete CSV ({len(report_stats)} rows)
                 </a>
                 '''
             
             html += '</div>'
             
             # Show only first 5 rows
-            display_stats = watershed_stats.head(5).copy()
+            display_stats = report_stats.head(5).copy()
             
             # Format the watershed stats table
             watershed_html = display_stats.to_html(

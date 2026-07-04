@@ -100,7 +100,7 @@ class CNStatistics:
         stats_list = zonal_stats(
             watershed_gdf.geometry,
             cn_raster_path,
-            stats=['min', 'max', 'mean', 'median', 'std', 'count', 'sum'],
+            stats=['min', 'max', 'mean', 'median', 'std'],
             nodata=0
         )
         

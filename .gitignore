@@ -12,6 +12,8 @@ ENV/
 # Distribution / packaging
 build/
 dist/
+release/
+*.spec
 *.egg-info/
 .eggs/
 
@@ -25,6 +27,7 @@ dist/
 # OS generated files
 .DS_Store
 Thumbs.db
+*.lnk
 
 # Gradio local state
 .gradio/
