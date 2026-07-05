@@ -82,7 +82,6 @@ if (Test-Path -LiteralPath $sampleSource) {
 }
 
 Copy-Item -LiteralPath (Join-Path $projectRoot "Logo\CN_Generator.ico") -Destination (Join-Path $packageDir "CN_Generator.ico") -Force
-Copy-Item -LiteralPath (Join-Path $projectRoot "tools\create_shortcut.ps1") -Destination (Join-Path $packageDir "create_shortcut.ps1") -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot "tools\package_create_shortcuts.bat") -Destination (Join-Path $packageDir "Create_Shortcuts.bat") -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot "tools\PACKAGE_README.txt") -Destination (Join-Path $packageDir "README.txt") -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot "LICENSE.md") -Destination (Join-Path $packageDir "LICENSE.txt") -Force
@@ -105,7 +104,7 @@ if (Test-Path -LiteralPath $internalDir) {
     $item.Attributes = $item.Attributes -bor [System.IO.FileAttributes]::Hidden
 }
 
-foreach ($helper in @("create_shortcut.ps1", "CN_Generator.ico")) {
+foreach ($helper in @("CN_Generator.ico")) {
     $helperPath = Join-Path $packageDir $helper
     if (Test-Path -LiteralPath $helperPath) {
         $item = Get-Item -LiteralPath $helperPath -Force
@@ -113,7 +112,7 @@ foreach ($helper in @("create_shortcut.ps1", "CN_Generator.ico")) {
     }
 }
 
-& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $packageDir "create_shortcut.ps1") `
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $projectRoot "tools\create_shortcut.ps1") `
     -TargetPath (Join-Path $packageDir "CN_Generator.exe") `
     -ShortcutPath (Join-Path $packageDir "CN_Generator.lnk") `
     -IconPath (Join-Path $packageDir "CN_Generator.ico") | Out-Null

@@ -901,7 +901,7 @@ def create_interface():
         - [Create Curve Number CN Raster Using ArcHydro Tools](https://www.hydromohsen.com/create-curve-number-cn-raster-for-a-watershed)
 
         ### References
-        - [USDA Technical Release 55](https://www.nrcs.usda.gov/wps/portal/nrcs/detailfull/national/water/manage/hydrology/) - Official documentation
+        - [USDA Technical Release 55](https://www.hydrocad.net/pdf/TR-55%20Manual.pdf) - Official documentation
         - [National Land Cover Database](https://www.mrlc.gov/) - Land cover data
         - [HEC-HMS CN Grid Guide](https://www.hec.usace.army.mil/confluence/hmsdocs/hmsguides/gis-tools-and-terrain-data/gis-tutorials-and-guides/creating-a-curve-number-grid-and-computing-subbasin-average-curve-number-values) - Technical guide
         - [SSURGO Soil Data Downloader](https://www.arcgis.com/apps/View/index.html?appid=cdc49bd63ea54dd2977f3f2853e07fff) - Soil data source

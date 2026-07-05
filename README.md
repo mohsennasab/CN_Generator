@@ -87,14 +87,14 @@ Install the developer/build dependencies:
 Build the package:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\build_windows_package.ps1 -Version 1.0.0
+powershell -ExecutionPolicy Bypass -File tools\build_windows_package.ps1 -Version 0.1
 ```
 
 The build creates:
 
 ```text
-release/CN_Generator_Windows_1.0.0/
-release/CN_Generator_Windows_1.0.0.zip
+release/CN_Generator_Windows_0.1/
+release/CN_Generator_Windows_0.1.zip
 ```
 
 Upload the zip file to a GitHub Release so non-developer users can download it.
