@@ -24,7 +24,7 @@ import time
 
 # Default configuration
 DEFAULT_CRS = "EPSG:4326"
-DEFAULT_CELL_SIZE = 10  # meters
+DEFAULT_CELL_SIZE = 30  # meters, matches the native NLCD land cover resolution
 APP_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 LOGO_PATH = APP_DIR / "Logo" / "CN_Generator.png"
 ICON_PATH = APP_DIR / "Logo" / "CN_Generator.ico"
@@ -420,7 +420,7 @@ def process_curve_numbers(
 def create_interface():
     css = """
     body {
-        font-family: "Segoe UI", Arial, sans-serif;
+        font-family: Arial, Helvetica, sans-serif;
         background: var(--body-background-fill);
         color: var(--body-text-color);
     }
@@ -619,70 +619,8 @@ def create_interface():
         color: var(--body-text-color);
     }
 
-    .workflow-row {
-        align-items: stretch;
-    }
-
-    .workflow-column {
-        display: flex;
-        align-self: stretch;
-        min-width: 0;
-    }
-
-    .workflow-card {
-        display: flex;
-        flex-direction: column;
-        width: 100%;
-        height: 100%;
-        box-sizing: border-box;
-        min-height: 720px;
-        padding: 18px;
-        background: var(--block-background-fill);
-        color: var(--body-text-color);
-        border: 1px solid var(--border-color-primary);
-        border-radius: 8px;
-        box-shadow: var(--block-shadow);
-    }
-
-    .workflow-card .gradio-group {
-        border: none;
-        padding: 0;
-    }
-
-    .workflow-heading {
-        margin-bottom: 12px;
-        padding-bottom: 12px;
-        border-bottom: 1px solid var(--border-color-primary);
-    }
-
-    .workflow-heading .step-label {
-        display: inline-block;
-        margin-bottom: 8px;
-        color: var(--body-text-color-subdued, var(--body-text-color));
-        font-size: 12px;
-        font-weight: 700;
-        letter-spacing: 0;
-        text-transform: uppercase;
-    }
-
-    .workflow-heading h3 {
-        margin: 0 0 6px 0;
-        color: var(--body-text-color);
-        font-size: 20px;
-        line-height: 1.25;
-    }
-
-    .workflow-heading p {
-        margin: 0;
-        color: var(--body-text-color-subdued, var(--body-text-color));
-        font-size: 13px;
-        line-height: 1.45;
-    }
-
     .workflow-subhead {
-        margin: 18px 0 8px 0;
-        padding-top: 12px;
-        border-top: 1px solid var(--border-color-primary);
+        margin: 14px 0 6px 0;
         color: var(--body-text-color);
         font-size: 14px;
         font-weight: 700;
@@ -700,16 +638,33 @@ def create_interface():
         line-height: 1.45;
     }
 
-    @media (max-width: 768px) {
-        .workflow-card {
-            min-height: 0;
-        }
+    /* Tab styling: clear progression, no wasted vertical space */
+    .workflow-tabs .tab-nav button,
+    .workflow-tabs button[role="tab"] {
+        font-weight: 600;
+        font-size: 15px;
+    }
+
+    .workflow-tabs .tabitem {
+        padding: 16px 14px;
+        border: 1px solid var(--border-color-primary);
+        border-top: none;
+        border-radius: 0 0 8px 8px;
+        background: var(--block-background-fill);
+    }
+
+    .calculate-row {
+        margin-top: 14px;
     }
     """
     
     with gr.Blocks(
         title="SCS Curve Number Generator",
-        theme=gr.themes.Soft(primary_hue="teal", neutral_hue="gray"),
+        theme=gr.themes.Soft(
+            primary_hue="teal",
+            neutral_hue="gray",
+            font=["Arial", "Helvetica", "sans-serif"],
+        ),
         css=css
     ) as demo:
         coffee_html = '''
@@ -745,207 +700,208 @@ def create_interface():
         </div>
         """)
         
-        # Add How to Use section directly in markdown
-        gr.HTML('''
-        <div class="how-to-use">
-            <h3>How to Use</h3>
-            <ol>
-                <li><strong>Upload your soil and land use shapefiles</strong> (zip files)</li>
-                <li><strong>Configure field mappings</strong> and parameters</li>
-                <li><strong>Optionally add watershed boundaries</strong> for zonal statistics (zip file)</li>
-                <li><strong>Optionally enable GCN10</strong> to view and download the global 10 m Curve Number dataset for your watershed and compare it with your results (needs internet)</li>
-                <li><strong>Click Calculate</strong> to generate curve numbers</li>
-            </ol>
-            <p>You can also skip your own soil and land use data and run GCN10 alone. Uncheck the box at the top of Step 1, upload a watershed boundary, and enable GCN10 in Step 2.</p>
-            
-            <h3>Shapefile Upload Requirements</h3>
-            <p>For shapefiles, ensure you upload ALL required components:</p>
-            <ul>
-                <li><code>.shp</code> (geometry)</li>
-                <li><code>.shx</code> (index)</li>
-                <li><code>.dbf</code> (attributes)</li>
-                <li><code>.prj</code> (projection)</li>
-            </ul>
-            <p><strong>Tip:</strong> Upload shapefiles as a ZIP archive containing all components for best results</p>
-            
-            <div class="disclaimer">
-                <strong>Disclaimer:</strong><br>
-                This app is provided as-is. The developer is not responsible for any claims or issues that may arise from its use. Please verify the results for accuracy before relying on them.
-            </div>
-        </div>
-        ''')
-        
-        gr.Markdown("---")
-        
-        with gr.Row(elem_classes=["workflow-row"]):
-            with gr.Column(scale=1, elem_classes=["workflow-column"]):
-                with gr.Group(elem_classes=["workflow-card"]):
-                    gr.HTML("""
-                    <div class="workflow-heading">
-                        <span class="step-label">Step 1</span>
-                        <h3>Input Data</h3>
-                        <p>Upload the required soil and land use layers first. Field selectors update automatically after each upload.</p>
+        # Tabbed workflow: numbered tabs make the progression clear
+        with gr.Tabs(elem_classes=["workflow-tabs"]) as workflow_tabs:
+            with gr.Tab("How to Use", id="howto"):
+                gr.HTML('''
+                <div class="how-to-use">
+                    <h3>How to Use</h3>
+                    <ol>
+                        <li><strong>1. Input Data:</strong> upload your soil and land use layers (ZIP shapefiles) and check the field mappings</li>
+                        <li><strong>2. Processing Parameters:</strong> confirm the coordinate system, cell size, dual soil-group handling, and optional watershed boundaries</li>
+                        <li><strong>3. GCN10 Global Dataset:</strong> optionally add the global 10 m Curve Number dataset to view, download, and compare (needs internet)</li>
+                        <li><strong>4. Results:</strong> click Calculate and review the report, map, and downloads</li>
+                    </ol>
+                    <p>You can also run GCN10 alone without soil and land use data. Uncheck the box in the Input Data tab, upload a watershed boundary in Processing Parameters, and enable GCN10 in its tab.</p>
+
+                    <h3>Shapefile Upload Requirements</h3>
+                    <p>For shapefiles, ensure you upload ALL required components:</p>
+                    <ul>
+                        <li><code>.shp</code> (geometry)</li>
+                        <li><code>.shx</code> (index)</li>
+                        <li><code>.dbf</code> (attributes)</li>
+                        <li><code>.prj</code> (projection)</li>
+                    </ul>
+                    <p><strong>Tip:</strong> Upload shapefiles as a ZIP archive containing all components for best results</p>
+
+                    <div class="disclaimer">
+                        <strong>Disclaimer:</strong><br>
+                        This app is provided as-is. The developer is not responsible for any claims or issues that may arise from its use. Please verify the results for accuracy before relying on them.
                     </div>
-                    <div class="workflow-hint">
-                        Start with ZIP shapefiles that include <code>.shp</code>, <code>.shx</code>, <code>.dbf</code>, and <code>.prj</code>, or upload GeoPackage/GeoJSON files.
-                    </div>
-                    """)
+                </div>
+                ''')
 
-                    run_user_cn = gr.Checkbox(
-                        label="Generate CN from my soil and land use data",
-                        value=True,
-                        info="Uncheck to skip this workflow and use only the GCN10 global dataset (enable it in Step 2). GCN10-only runs need a watershed boundary."
-                    )
+            with gr.Tab("1. Input Data", id="inputs"):
+                run_user_cn = gr.Checkbox(
+                    label="Generate CN from my soil and land use data",
+                    value=True,
+                    info="Uncheck to skip this workflow and use only the GCN10 global dataset (tab 3). GCN10-only runs need a watershed boundary (tab 2)."
+                )
 
-                    soil_file = gr.File(
-                        label="1. Soil Layer",
-                        elem_id="soil_input"
-                    )
-                    
-                    landuse_file = gr.File(
-                        label="2. Land Use Layer", 
-                        elem_id="landuse_input"
-                    )
-                    
-                    gr.HTML('<div class="workflow-subhead">Field Mapping</div>')
-                    
-                    hydgrp_field = gr.Dropdown(
-                        label="Soil Hydrologic Group Field",
-                        choices=["hydgrpdcd"],
-                        value="hydgrpdcd",
-                        allow_custom_value=True,
-                        info="Select the soil attribute containing A, B, C, D soil groups."
-                    )
-                    
-                    code_field = gr.Dropdown(
-                        label="Land Use Code Field",
-                        choices=["gridcode"],
-                        value="gridcode",
-                        allow_custom_value=True,
-                        info="Select the land use attribute containing numeric land use codes."
-                    )
+                with gr.Row(equal_height=False):
+                    with gr.Column(scale=1):
+                        gr.HTML('<div class="workflow-subhead">Data Layers</div>')
+                        gr.HTML("""
+                        <div class="workflow-hint">
+                            Upload ZIP shapefiles that include <code>.shp</code>, <code>.shx</code>, <code>.dbf</code>, and <code>.prj</code>, or GeoPackage/GeoJSON files. Field selectors update automatically after each upload.
+                        </div>
+                        """)
 
-                    soil_file.change(
-                        fn=lambda file: get_column_options(
-                            file,
-                            preferred_names={"hydgrpdcd", "hydgrp", "hydgroup", "hydrologic_group", "soil_group"},
-                            fallback_value="hydgrpdcd",
-                        ),
-                        inputs=[soil_file],
-                        outputs=[hydgrp_field]
-                    )
+                        soil_file = gr.File(
+                            label="Soil Layer",
+                            elem_id="soil_input"
+                        )
 
-                    landuse_file.change(
-                        fn=lambda file: get_column_options(
-                            file,
-                            preferred_names={"gridcode", "landuse", "land_use", "lucode", "lu_code", "nlcd", "code"},
-                            fallback_value="gridcode",
-                        ),
-                        inputs=[landuse_file],
-                        outputs=[code_field]
-                    )
-                    
-                    gr.HTML('<div class="workflow-subhead">Curve Number Lookup</div>')
-                    
-                    use_nlcd = gr.Checkbox(
-                        label="Use NLCD Lookup Table",
-                        value=True,
-                        info="Use built-in National Land Cover Database CN values. Uncheck to upload custom CSV lookup table."
-                    )
-                    
-                    lookup_file = gr.File(
-                        label="Custom Lookup Table (CSV)",
-                        visible=False
-                    )
-                    
-                    use_nlcd.change(
-                        fn=lambda x: gr.update(visible=not x),
-                        inputs=[use_nlcd],
-                        outputs=[lookup_file]
-                    )
-                
-            with gr.Column(scale=1, elem_classes=["workflow-column"]):
-                with gr.Group(elem_classes=["workflow-card"]):
-                    gr.HTML("""
-                    <div class="workflow-heading">
-                        <span class="step-label">Step 2</span>
-                        <h3>Processing Parameters</h3>
-                        <p>Confirm the coordinate system, raster resolution, dual soil-group handling, and optional watershed analysis.</p>
-                    </div>
-                    <div class="workflow-hint">
-                        After required inputs are selected, review these defaults and then run the calculation below.
-                    </div>
-                    """)
-                    
-                    crs_epsg = gr.Number(
-                        label="Coordinate System (EPSG Code)",
-                        value=4326,
-                        info="e.g., 4326 for WGS84, 3857 for Web Mercator"
-                    )
-                    
-                    cell_size = gr.Number(
-                        label="Raster Cell Size (map units)",
-                        value=10,
-                        info="Resolution for output raster"
-                    )
-                    
-                    gr.HTML('<div class="workflow-subhead">Dual Hydrologic Group Replacements</div>')
-                    
-                    replacement_ad = gr.Dropdown(
-                        label="Replace A/D with",
-                        choices=["A", "B", "C", "D"],
-                        value="D",
-                        info="Replacement for dual group A/D soils"
-                    )
-                    
-                    replacement_bd = gr.Dropdown(
-                        label="Replace B/D with",
-                        choices=["A", "B", "C", "D"],
-                        value="D",
-                        info="Replacement for dual group B/D soils"
-                    )
-                    
-                    replacement_cd = gr.Dropdown(
-                        label="Replace C/D with",
-                        choices=["A", "B", "C", "D"],
-                        value="D",
-                        info="Replacement for dual group C/D soils"
-                    )
-                    
-                    gr.HTML('<div class="workflow-subhead">Watershed Analysis (Optional)</div>')
-                    
-                    watershed_file = gr.File(
-                        label="Watershed Boundaries",
-                        elem_id="watershed_input"
-                    )
-                    
-                    watershed_field = gr.Dropdown(
-                        label="Watershed Name/ID Field",
-                        choices=[],
-                        value=None,
-                        allow_custom_value=True,
-                        info="Select the field that identifies each watershed. The list updates after upload."
-                    )
+                        landuse_file = gr.File(
+                            label="Land Use Layer",
+                            elem_id="landuse_input"
+                        )
 
-                    watershed_file.change(
-                        fn=lambda file: get_column_options(
-                            file,
-                            preferred_names={"name", "watershed", "watershed_id", "huc", "huc_id", "huc8", "id"},
-                            fallback_value=None,
-                        ),
-                        inputs=[watershed_file],
-                        outputs=[watershed_field]
-                    )
+                    with gr.Column(scale=1):
+                        gr.HTML('<div class="workflow-subhead">Field Mapping</div>')
 
-                    gr.HTML('<div class="workflow-subhead">GCN10 Global Dataset (Optional)</div>')
+                        hydgrp_field = gr.Dropdown(
+                            label="Soil Hydrologic Group Field",
+                            choices=["hydgrpdcd"],
+                            value="hydgrpdcd",
+                            allow_custom_value=True,
+                            info="Select the soil attribute containing A, B, C, D soil groups."
+                        )
 
-                    use_gcn10 = gr.Checkbox(
-                        label="Include GCN10 global Curve Number data",
-                        value=False,
-                        info="Streams the global 10 m Curve Number dataset (Azzam and Cho, 2026) for your area so you can view it, download it, and compare it with your results. Needs an internet connection during processing."
-                    )
+                        code_field = gr.Dropdown(
+                            label="Land Use Code Field",
+                            choices=["gridcode"],
+                            value="gridcode",
+                            allow_custom_value=True,
+                            info="Select the land use attribute containing numeric land use codes."
+                        )
 
-                    with gr.Group(visible=False) as gcn10_options:
+                        gr.HTML('<div class="workflow-subhead">Curve Number Lookup</div>')
+
+                        use_nlcd = gr.Checkbox(
+                            label="Use NLCD Lookup Table",
+                            value=True,
+                            info="Use built-in National Land Cover Database CN values. Uncheck to upload custom CSV lookup table."
+                        )
+
+                        lookup_file = gr.File(
+                            label="Custom Lookup Table (CSV)",
+                            visible=False
+                        )
+
+                soil_file.change(
+                    fn=lambda file: get_column_options(
+                        file,
+                        preferred_names={"hydgrpdcd", "hydgrp", "hydgroup", "hydrologic_group", "soil_group"},
+                        fallback_value="hydgrpdcd",
+                    ),
+                    inputs=[soil_file],
+                    outputs=[hydgrp_field]
+                )
+
+                landuse_file.change(
+                    fn=lambda file: get_column_options(
+                        file,
+                        preferred_names={"gridcode", "landuse", "land_use", "lucode", "lu_code", "nlcd", "code"},
+                        fallback_value="gridcode",
+                    ),
+                    inputs=[landuse_file],
+                    outputs=[code_field]
+                )
+
+                use_nlcd.change(
+                    fn=lambda x: gr.update(visible=not x),
+                    inputs=[use_nlcd],
+                    outputs=[lookup_file]
+                )
+
+            with gr.Tab("2. Processing Parameters", id="params"):
+                with gr.Row(equal_height=False):
+                    with gr.Column(scale=1):
+                        gr.HTML('<div class="workflow-subhead">Raster Settings</div>')
+
+                        crs_epsg = gr.Number(
+                            label="Coordinate System (EPSG Code)",
+                            value=4326,
+                            info="e.g., 4326 for WGS84, 3857 for Web Mercator"
+                        )
+
+                        cell_size = gr.Number(
+                            label="Raster Cell Size (meters)",
+                            value=30,
+                            info="Output raster resolution. The default of 30 meters matches the native resolution of NLCD land cover. For EPSG:4326 the value is converted to degrees automatically; for other coordinate systems it is used directly in their map units."
+                        )
+
+                        gr.HTML('<div class="workflow-subhead">Dual Hydrologic Group Replacements</div>')
+
+                        with gr.Row():
+                            replacement_ad = gr.Dropdown(
+                                label="Replace A/D with",
+                                choices=["A", "B", "C", "D"],
+                                value="D",
+                                info="For dual group A/D soils"
+                            )
+
+                            replacement_bd = gr.Dropdown(
+                                label="Replace B/D with",
+                                choices=["A", "B", "C", "D"],
+                                value="D",
+                                info="For dual group B/D soils"
+                            )
+
+                            replacement_cd = gr.Dropdown(
+                                label="Replace C/D with",
+                                choices=["A", "B", "C", "D"],
+                                value="D",
+                                info="For dual group C/D soils"
+                            )
+
+                    with gr.Column(scale=1):
+                        gr.HTML('<div class="workflow-subhead">Watershed Analysis (Optional)</div>')
+                        gr.HTML("""
+                        <div class="workflow-hint">
+                            Add watershed or subbasin boundaries to get per-basin CN statistics. This layer is also required when running GCN10 without your own soil and land use data.
+                        </div>
+                        """)
+
+                        watershed_file = gr.File(
+                            label="Watershed Boundaries",
+                            elem_id="watershed_input"
+                        )
+
+                        watershed_field = gr.Dropdown(
+                            label="Watershed Name/ID Field",
+                            choices=[],
+                            value=None,
+                            allow_custom_value=True,
+                            info="Select the field that identifies each watershed. The list updates after upload."
+                        )
+
+                watershed_file.change(
+                    fn=lambda file: get_column_options(
+                        file,
+                        preferred_names={"name", "watershed", "watershed_id", "huc", "huc_id", "huc8", "id"},
+                        fallback_value=None,
+                    ),
+                    inputs=[watershed_file],
+                    outputs=[watershed_field]
+                )
+
+            with gr.Tab("3. GCN10 Global Dataset (Optional)", id="gcn10"):
+                gr.HTML("""
+                <div class="workflow-hint">
+                    GCN10 is a global 10 m Curve Number dataset by Azzam and Cho (2026), built from ESA WorldCover 2021 land cover and HYSOGs250m soil groups. Enable it to view the GCN10 raster on the map, download it for your watershed, and compare it with your own results. The app streams only the data covering your area, so a typical run adds a few seconds. Needs an internet connection during processing.
+                </div>
+                """)
+
+                use_gcn10 = gr.Checkbox(
+                    label="Include GCN10 global Curve Number data",
+                    value=False,
+                    info="Off by default. Everything else in the app works without it."
+                )
+
+                with gr.Group(visible=False) as gcn10_options:
+                    with gr.Row():
                         gcn10_hc = gr.Dropdown(
                             label="Hydrologic Condition",
                             choices=list(gcn10.HYDROLOGIC_CONDITIONS.keys()),
@@ -967,35 +923,83 @@ def create_interface():
                             info="How GCN10 interprets dual groups such as A/D: Drained uses the first letter, Undrained uses D"
                         )
 
-                    use_gcn10.change(
-                        fn=lambda enabled: gr.update(visible=enabled),
-                        inputs=[use_gcn10],
-                        outputs=[gcn10_options]
-                    )
+                gr.HTML(f"""
+                <div style="font-size: 12px; margin-top: 10px; color: var(--body-text-color-subdued, #666);">
+                    Data credit: <a href="{gcn10.GCN10_DATASET_URL}" target="_blank">{gcn10.GCN10_ATTRIBUTION}</a>, ODbL v1.0 license.
+                </div>
+                """)
 
-        calculate_btn = gr.Button("Calculate Curve Numbers", variant="primary", size="lg")
-        
-        # Processing status display
-        status_display = gr.HTML(visible=False, elem_classes="processing-status")
-        
-        gr.Markdown("---")
-        gr.Markdown("### Outputs")
-        
-        with gr.Row():
-            vector_output = gr.File(label="CN Polygons (GeoPackage)", visible=False)
-            raster_output = gr.File(label="CN Raster (GeoTIFF)", visible=False)
-            watershed_excel_output = gr.File(label="Watershed Statistics (Excel)", visible=False)
-            gcn10_raster_output = gr.File(label="GCN10 Raster (GeoTIFF)", visible=False)
-            gcn10_csv_output = gr.File(label="GCN10 Watershed Statistics (CSV)", visible=False)
+                use_gcn10.change(
+                    fn=lambda enabled: gr.update(visible=enabled),
+                    inputs=[use_gcn10],
+                    outputs=[gcn10_options]
+                )
 
-        # Report above map
-        report_output = gr.HTML(label="Analysis Report", visible=False)
+            with gr.Tab("4. Results", id="results"):
+                gr.HTML("""
+                <div class="workflow-hint">
+                    Set up tabs 1 to 3, then click Calculate Curve Numbers below. The report, map, and download files appear here when processing finishes.
+                </div>
+                """)
 
-        # Map with increased height
-        map_output = gr.HTML(label="Interactive Map", elem_classes="map-container", visible=False)
+                # Processing status display
+                status_display = gr.HTML(visible=False, elem_classes="processing-status")
+
+                with gr.Row():
+                    vector_output = gr.File(label="CN Polygons (GeoPackage)", visible=False)
+                    raster_output = gr.File(label="CN Raster (GeoTIFF)", visible=False)
+                    watershed_excel_output = gr.File(label="Watershed Statistics (Excel)", visible=False)
+                    gcn10_raster_output = gr.File(label="GCN10 Raster (GeoTIFF)", visible=False)
+                    gcn10_csv_output = gr.File(label="GCN10 Watershed Statistics (CSV)", visible=False)
+
+                # Report above map
+                report_output = gr.HTML(label="Analysis Report", visible=False)
+
+                # Map with increased height
+                map_output = gr.HTML(label="Interactive Map", elem_classes="map-container", visible=False)
+
+            with gr.Tab("About & References", id="about"):
+                gr.Markdown("""
+                ### About SCS Curve Numbers
+
+                The SCS Curve Number method is a widely used approach to estimate direct runoff from rainfall events. It considers:
+
+                - **Hydrologic Soil Groups (A-D)**: Soil infiltration capacity
+                - **Land Use/Land Cover**: Surface conditions affecting runoff
+                - **Antecedent Moisture**: Soil wetness before rainfall
+
+                **CN Values**: Range from 30 (low runoff) to 100 (impervious surfaces)
+
+                ### About the GCN10 Dataset
+
+                The optional GCN10 layer comes from the Global Curve Number 10m dataset by Muhammad Abdullah Azzam and Huidae Cho
+                (New Mexico State University). It combines ESA WorldCover 2021 land cover with HYSOGs250m hydrologic soil groups
+                to produce global 10 m Curve Number rasters for multiple hydrologic conditions, antecedent runoff conditions, and
+                drainage assumptions. The data is distributed under the Open Data Commons Open Database License (ODbL) v1.0.
+
+                - Dataset: [GCN10 -- Global 10 m Curve Number Dataset (Azzam et al.)](https://hydro.nmsu.edu/datasets/gcn10/)
+                - Citation: Azzam, M. A., Cho, H., 2026. GCN10: An MPI-parallelized framework for processing global curve number
+                  rasters for hydrologic modeling. SoftwareX 34, 102725. [doi:10.1016/j.softx.2026.102725](https://doi.org/10.1016/j.softx.2026.102725)
+                - Software: [github.com/clawrim/gcn10](https://github.com/clawrim/gcn10)
+
+                ### Helpful Resources
+
+                **ArcGIS Pro Tutorial**
+                Learn how to calculate CN in ArcGIS Pro:
+                - [Create Curve Number CN Raster Using ArcHydro Tools](https://www.hydromohsen.com/create-curve-number-cn-raster-for-a-watershed)
+
+                ### References
+                - [USDA Technical Release 55](https://www.hydrocad.net/pdf/TR-55%20Manual.pdf) - Official documentation
+                - [National Land Cover Database](https://www.mrlc.gov/) - Land cover data
+                - [HEC-HMS CN Grid Guide](https://www.hec.usace.army.mil/confluence/hmsdocs/hmsguides/gis-tools-and-terrain-data/gis-tutorials-and-guides/creating-a-curve-number-grid-and-computing-subbasin-average-curve-number-values) - Technical guide
+                - [SSURGO Soil Data Downloader](https://www.arcgis.com/apps/View/index.html?appid=cdc49bd63ea54dd2977f3f2853e07fff) - Soil data source
+                """)
+
+        with gr.Row(elem_classes=["calculate-row"]):
+            calculate_btn = gr.Button("Calculate Curve Numbers", variant="primary", size="lg")
 
         def update_outputs(*args, progress=gr.Progress(track_tqdm=True)):
-            # Show processing status
+            # Jump to the Results tab and show the processing status
             yield (
                 gr.update(),  # vector_output
                 gr.update(),  # raster_output
@@ -1004,7 +1008,8 @@ def create_interface():
                 gr.update(),  # watershed_excel_output
                 gr.update(),  # gcn10_raster_output
                 gr.update(),  # gcn10_csv_output
-                gr.update(value='<div class="processing-status">Processing started. Progress details will appear above while the app runs.</div>', visible=True)  # status
+                gr.update(value='<div class="processing-status">Processing started. Progress details will appear at the top right while the app runs.</div>', visible=True),  # status
+                gr.Tabs(selected="results"),  # switch to the Results tab
             )
 
             # Run the actual processing
@@ -1025,7 +1030,8 @@ def create_interface():
                 gr.update(value=excel_path, visible=excel_path is not None),
                 gr.update(value=gcn10_raster_path, visible=gcn10_raster_path is not None),
                 gr.update(value=gcn10_csv_path, visible=gcn10_csv_path is not None),
-                gr.update(value=f'<div class="{status_class}">{time_display}</div>', visible=True)
+                gr.update(value=f'<div class="{status_class}">{time_display}</div>', visible=True),
+                gr.update(),  # keep the current tab selection
             )
 
         calculate_btn.click(
@@ -1040,46 +1046,9 @@ def create_interface():
             outputs=[
                 vector_output, raster_output, report_output, map_output,
                 watershed_excel_output, gcn10_raster_output, gcn10_csv_output,
-                status_display
+                status_display, workflow_tabs
             ]
         )
-        
-        gr.Markdown("""
-        ---
-        ### About SCS Curve Numbers
-
-        The SCS Curve Number method is a widely used approach to estimate direct runoff from rainfall events. It considers:
-
-        - **Hydrologic Soil Groups (A-D)**: Soil infiltration capacity
-        - **Land Use/Land Cover**: Surface conditions affecting runoff
-        - **Antecedent Moisture**: Soil wetness before rainfall
-
-        **CN Values**: Range from 30 (low runoff) to 100 (impervious surfaces)
-
-        ### About the GCN10 Dataset
-
-        The optional GCN10 layer comes from the Global Curve Number 10m dataset by Muhammad Abdullah Azzam and Huidae Cho
-        (New Mexico State University). It combines ESA WorldCover 2021 land cover with HYSOGs250m hydrologic soil groups
-        to produce global 10 m Curve Number rasters for multiple hydrologic conditions, antecedent runoff conditions, and
-        drainage assumptions. The data is distributed under the Open Data Commons Open Database License (ODbL) v1.0.
-
-        - Dataset: [GCN10 -- Global 10 m Curve Number Dataset (Azzam et al.)](https://hydro.nmsu.edu/datasets/gcn10/)
-        - Citation: Azzam, M. A., Cho, H., 2026. GCN10: An MPI-parallelized framework for processing global curve number
-          rasters for hydrologic modeling. SoftwareX 34, 102725. [doi:10.1016/j.softx.2026.102725](https://doi.org/10.1016/j.softx.2026.102725)
-        - Software: [github.com/clawrim/gcn10](https://github.com/clawrim/gcn10)
-
-        ### Helpful Resources
-
-        **ArcGIS Pro Tutorial**  
-        Learn how to calculate CN in ArcGIS Pro:
-        - [Create Curve Number CN Raster Using ArcHydro Tools](https://www.hydromohsen.com/create-curve-number-cn-raster-for-a-watershed)
-
-        ### References
-        - [USDA Technical Release 55](https://www.hydrocad.net/pdf/TR-55%20Manual.pdf) - Official documentation
-        - [National Land Cover Database](https://www.mrlc.gov/) - Land cover data
-        - [HEC-HMS CN Grid Guide](https://www.hec.usace.army.mil/confluence/hmsdocs/hmsguides/gis-tools-and-terrain-data/gis-tutorials-and-guides/creating-a-curve-number-grid-and-computing-subbasin-average-curve-number-values) - Technical guide
-        - [SSURGO Soil Data Downloader](https://www.arcgis.com/apps/View/index.html?appid=cdc49bd63ea54dd2977f3f2853e07fff) - Soil data source
-        """)
     
     return demo
 
