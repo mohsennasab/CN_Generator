@@ -702,15 +702,15 @@ def create_interface():
         
         # Tabbed workflow: numbered tabs make the progression clear
         with gr.Tabs(elem_classes=["workflow-tabs"]) as workflow_tabs:
-            with gr.Tab("How to Use", id="howto"):
+            with gr.Tab("How to Use", id="howto") as tab_howto:
                 gr.HTML('''
                 <div class="how-to-use">
                     <h3>How to Use</h3>
                     <ol>
-                        <li><strong>1. Input Data:</strong> upload your soil and land use layers (ZIP shapefiles) and check the field mappings</li>
-                        <li><strong>2. Processing Parameters:</strong> confirm the coordinate system, cell size, dual soil-group handling, and optional watershed boundaries</li>
-                        <li><strong>3. GCN10 Global Dataset:</strong> optionally add the global 10 m Curve Number dataset to view, download, and compare (needs internet)</li>
-                        <li><strong>4. Results:</strong> click Calculate and review the report, map, and downloads</li>
+                        <li><strong>Input Data:</strong> upload your soil and land use layers (ZIP shapefiles) and check the field mappings</li>
+                        <li><strong>Processing Parameters:</strong> confirm the coordinate system, cell size, dual soil-group handling, and optional watershed boundaries</li>
+                        <li><strong>GCN10 Global Dataset:</strong> optionally add the global 10 m Curve Number dataset to view, download, and compare (needs internet)</li>
+                        <li><strong>Results:</strong> click Calculate and review the report, map, and downloads</li>
                     </ol>
                     <p>You can also run GCN10 alone without soil and land use data. Uncheck the box in the Input Data tab, upload a watershed boundary in Processing Parameters, and enable GCN10 in its tab.</p>
 
@@ -731,7 +731,7 @@ def create_interface():
                 </div>
                 ''')
 
-            with gr.Tab("1. Input Data", id="inputs"):
+            with gr.Tab("1. Input Data", id="inputs") as tab_inputs:
                 run_user_cn = gr.Checkbox(
                     label="Generate CN from my soil and land use data",
                     value=True,
@@ -815,7 +815,7 @@ def create_interface():
                     outputs=[lookup_file]
                 )
 
-            with gr.Tab("2. Processing Parameters", id="params"):
+            with gr.Tab("2. Processing Parameters", id="params") as tab_params:
                 with gr.Row(equal_height=False):
                     with gr.Column(scale=1):
                         gr.HTML('<div class="workflow-subhead">Raster Settings</div>')
@@ -887,7 +887,7 @@ def create_interface():
                     outputs=[watershed_field]
                 )
 
-            with gr.Tab("3. GCN10 Global Dataset (Optional)", id="gcn10"):
+            with gr.Tab("3. GCN10 Global Dataset (Optional)", id="gcn10") as tab_gcn10:
                 gr.HTML("""
                 <div class="workflow-hint">
                     GCN10 is a global 10 m Curve Number dataset by Azzam and Cho (2026), built from ESA WorldCover 2021 land cover and HYSOGs250m soil groups. Enable it to view the GCN10 raster on the map, download it for your watershed, and compare it with your own results. The app streams only the data covering your area, so a typical run adds a few seconds. Needs an internet connection during processing.
@@ -935,7 +935,7 @@ def create_interface():
                     outputs=[gcn10_options]
                 )
 
-            with gr.Tab("4. Results", id="results"):
+            with gr.Tab("4. Results", id="results") as tab_results:
                 gr.HTML("""
                 <div class="workflow-hint">
                     Set up tabs 1 to 3, then click Calculate Curve Numbers below. The report, map, and download files appear here when processing finishes.
@@ -958,7 +958,7 @@ def create_interface():
                 # Map with increased height
                 map_output = gr.HTML(label="Interactive Map", elem_classes="map-container", visible=False)
 
-            with gr.Tab("About & References", id="about"):
+            with gr.Tab("About & References", id="about") as tab_about:
                 gr.Markdown("""
                 ### About SCS Curve Numbers
 
@@ -996,7 +996,24 @@ def create_interface():
                 """)
 
         with gr.Row(elem_classes=["calculate-row"]):
-            calculate_btn = gr.Button("Calculate Curve Numbers", variant="primary", size="lg")
+            calculate_btn = gr.Button(
+                "Calculate Curve Numbers",
+                variant="primary",
+                size="lg",
+                interactive=False,
+            )
+
+        # The button only becomes active on the Results tab, so the setup
+        # tabs are completed first
+        for setup_tab in [tab_howto, tab_inputs, tab_params, tab_gcn10, tab_about]:
+            setup_tab.select(
+                fn=lambda: gr.update(interactive=False),
+                outputs=[calculate_btn],
+            )
+        tab_results.select(
+            fn=lambda: gr.update(interactive=True),
+            outputs=[calculate_btn],
+        )
 
         def update_outputs(*args, progress=gr.Progress(track_tqdm=True)):
             # Jump to the Results tab and show the processing status
