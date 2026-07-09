@@ -34,6 +34,7 @@ if (-not $SkipBuild) {
             --name CN_Generator `
             --icon "$icon" `
             --add-data "Logo;Logo" `
+            --add-data "data\gcn10;data\gcn10" `
             --collect-all gradio `
             --collect-all gradio_client `
             --collect-all safehttpx `

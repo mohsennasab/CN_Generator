@@ -68,10 +68,11 @@ class CNStatistics:
     @staticmethod
     def calculate_zonal_statistics(cn_raster_path: str,
                                   watershed_gdf: gpd.GeoDataFrame,
-                                  watershed_field: str) -> pd.DataFrame:
+                                  watershed_field: str,
+                                  nodata: float = 0) -> pd.DataFrame:
         """
         Calculate zonal statistics for watersheds.
-        
+
         Parameters:
         -----------
         cn_raster_path : str
@@ -80,28 +81,31 @@ class CNStatistics:
             Watershed boundaries
         watershed_field : str
             Field with watershed names/IDs
-            
+        nodata : float
+            NoData value of the raster (0 for app-generated CN rasters,
+            255 for GCN10 rasters)
+
         Returns:
         --------
         DataFrame : Zonal statistics for each watershed
         """
         print("Calculating zonal statistics for watersheds...")
-        
+
         # Open raster to check CRS
         with rasterio.open(cn_raster_path) as src:
             raster_crs = src.crs
-            
+
         # Reproject watersheds if needed
         if watershed_gdf.crs != raster_crs:
             print(f"Reprojecting watersheds to match raster CRS")
             watershed_gdf = watershed_gdf.to_crs(raster_crs)
-        
+
         # Calculate zonal statistics
         stats_list = zonal_stats(
             watershed_gdf.geometry,
             cn_raster_path,
             stats=['min', 'max', 'mean', 'median', 'std'],
-            nodata=0
+            nodata=nodata
         )
         
         # Create results dataframe
@@ -124,6 +128,52 @@ class CNStatistics:
         
         return results
     
+    @staticmethod
+    def build_comparison_table(user_stats: pd.DataFrame,
+                               gcn10_stats: pd.DataFrame,
+                               watershed_field: str) -> pd.DataFrame:
+        """
+        Merge user CN and GCN10 zonal statistics into one comparison table.
+
+        Both inputs come from calculate_zonal_statistics over the same
+        watershed polygons. Each raster is summarized on its own grid, so the
+        differences reflect the data sources, not resampling.
+
+        Parameters:
+        -----------
+        user_stats : DataFrame
+            Zonal statistics for the user-generated CN raster
+        gcn10_stats : DataFrame
+            Zonal statistics for the GCN10 raster
+        watershed_field : str
+            Field with watershed names/IDs
+
+        Returns:
+        --------
+        DataFrame : Side-by-side statistics with a mean difference column
+        """
+        user = user_stats[[watershed_field, 'mean', 'median', 'min', 'max']].copy()
+        gcn = gcn10_stats[[watershed_field, 'mean', 'median', 'min', 'max']].copy()
+        user.columns = [watershed_field, 'user_mean', 'user_median', 'user_min', 'user_max']
+        gcn.columns = [watershed_field, 'gcn10_mean', 'gcn10_median', 'gcn10_min', 'gcn10_max']
+
+        comparison = user.merge(gcn, on=watershed_field, how='outer')
+        comparison['mean_diff'] = comparison['user_mean'] - comparison['gcn10_mean']
+
+        ordered = [
+            watershed_field,
+            'user_mean', 'gcn10_mean', 'mean_diff',
+            'user_median', 'gcn10_median',
+            'user_min', 'gcn10_min',
+            'user_max', 'gcn10_max',
+        ]
+        comparison = comparison[ordered]
+
+        numeric_cols = comparison.select_dtypes(include=[np.number]).columns
+        comparison[numeric_cols] = comparison[numeric_cols].round(2)
+
+        return comparison
+
     @staticmethod
     def generate_cn_distribution(cn_gdf: gpd.GeoDataFrame) -> pd.DataFrame:
         """

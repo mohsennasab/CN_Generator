@@ -16,6 +16,7 @@ from src.curve_number_calculator import CurveNumberCalculator
 from src.spatial_operations import SpatialOperations
 from src.cn_statistics import CNStatistics
 from src.visualization import CNVisualization
+from src import gcn10
 import json
 import zipfile
 import shutil
@@ -135,6 +136,14 @@ def validate_shapefile_upload(file):
     except Exception as e:
         return False, f"Error validating file: {str(e)}"
 
+def build_result(vector_path=None, raster_path=None, report_html=None, map_html=None,
+                 excel_output=None, gcn10_raster_path=None, gcn10_csv_path=None,
+                 status_message=""):
+    """Assemble the fixed-order result tuple returned to the interface."""
+    return (vector_path, raster_path, report_html, map_html, excel_output,
+            gcn10_raster_path, gcn10_csv_path, status_message)
+
+
 def process_curve_numbers(
     soil_file,
     landuse_file,
@@ -149,159 +158,263 @@ def process_curve_numbers(
     replacement_cd,
     watershed_file,
     watershed_field,
+    run_user_cn,
+    use_gcn10,
+    gcn10_hc,
+    gcn10_arc,
+    gcn10_drainage,
     progress=None
 ):
     """Main processing function for Gradio interface."""
-    
+
     start_time = time.time()
-    
+
     try:
-        update_progress(progress, 0.03, "Validating uploaded files")
-        # Validate inputs
-        if soil_file is None:
-            return None, None, None, None, "Please upload a soil shapefile", ""
-        if landuse_file is None:
-            return None, None, None, None, "Please upload a land use shapefile", ""
-            
-        # Validate shapefile uploads (only show warnings, don't block processing)
-        soil_valid, soil_msg = validate_shapefile_upload(soil_file)
-        landuse_valid, landuse_msg = validate_shapefile_upload(landuse_file)
-        
-        warning_messages = []
-        if not soil_valid and "Missing required" in soil_msg:
-            warning_messages.append(f"Soil file: {soil_msg}")
-        if not landuse_valid and "Missing required" in landuse_msg:
-            warning_messages.append(f"Land use file: {landuse_msg}")
-            
-        # Initialize calculator
-        calc = CurveNumberCalculator(
-            crs=f"EPSG:{crs_epsg}",
-            use_parallel=True
-        )
-        
-        # Load data
-        update_progress(progress, 0.12, "Loading soil and land use layers")
-        try:
-            soil_gdf = gpd.read_file(soil_file.name)
-        except Exception as e:
-            return None, None, None, None, f"Error reading soil file: {str(e)}", ""
-            
-        try:
-            landuse_gdf = gpd.read_file(landuse_file.name)
-        except Exception as e:
-            return None, None, None, None, f"Error reading land use file: {str(e)}", ""
-        
-        # Load lookup table
-        update_progress(progress, 0.22, "Loading curve number lookup table")
-        if use_nlcd:
-            lookup_df = calc.load_lookup_table(use_nlcd=True)
-        else:
-            if lookup_file is None:
-                return None, None, None, None, "Please provide a lookup table or enable NLCD option", ""
-            lookup_df = calc.load_lookup_table(lookup_path=lookup_file.name)
-        
-        # Preprocess data and track missing hydrogroup values
-        update_progress(progress, 0.32, "Preparing soil and land use attributes")
-        replacements = {
-            'A/D': replacement_ad,
-            'B/D': replacement_bd,
-            'C/D': replacement_cd
-        }
-        
-        # Count missing hydrogroup values before preprocessing
-        original_soil_gdf = soil_gdf.copy()
-        valid_groups = ['A', 'B', 'C', 'D', 'A/D', 'B/D', 'C/D']
-        missing_hydrogroup_count = (~original_soil_gdf[hydgrp_field].isin(valid_groups)).sum()
-        
-        soil_gdf = calc.preprocess_soil_data(soil_gdf, hydgrp_field, replacements)
-        landuse_gdf = calc.preprocess_landuse_data(landuse_gdf, code_field)
-        
-        # Compute intersection
-        update_progress(progress, 0.45, "Intersecting soil and land use polygons")
-        intersection_gdf = calc.compute_intersection(
-            soil_gdf, landuse_gdf, hydgrp_field, code_field
-        )
-        
-        # Assign curve numbers
-        update_progress(progress, 0.56, "Assigning curve numbers")
-        cn_gdf = calc.assign_curve_numbers(
-            intersection_gdf, lookup_df, hydgrp_field, code_field
-        )
-        
-        # Dissolve by CN
-        update_progress(progress, 0.64, "Dissolving polygons by curve number")
-        dissolved_gdf = calc.dissolve_by_cn(cn_gdf)
-        
-        # Create raster - use a specific filename to avoid conflicts
-        raster_filename = f"cn_raster_{os.getpid()}_{hash(str(dissolved_gdf.bounds.iloc[0]) if len(dissolved_gdf) > 0 else 'empty')}.tif"
-        raster_path = os.path.join(tempfile.gettempdir(), raster_filename)
-        
-        update_progress(progress, 0.72, "Creating CN raster")
-        raster_path = SpatialOperations.create_cn_raster(
-            dissolved_gdf, cell_size, raster_path
-        )
-        
-        # Calculate statistics
-        update_progress(progress, 0.80, "Calculating summary statistics")
-        global_stats = CNStatistics.calculate_global_stats(dissolved_gdf)
-        # Add missing hydrogroup count to stats
-        global_stats['missing_hydrogroup_count'] = missing_hydrogroup_count
-        
-        # Process watersheds if provided
-        watershed_stats_df = None
+        update_progress(progress, 0.03, "Validating inputs")
+
+        if not run_user_cn and not use_gcn10:
+            return build_result(status_message=(
+                "Nothing to process. Enable at least one data source: generate CN "
+                "from your own soil and land use data, or use the GCN10 dataset."))
+
+        # Validate inputs for the user CN workflow
+        if run_user_cn:
+            if soil_file is None:
+                return build_result(status_message="Please upload a soil shapefile")
+            if landuse_file is None:
+                return build_result(status_message="Please upload a land use shapefile")
+
+            # Validate shapefile uploads (only show warnings, don't block processing)
+            soil_valid, soil_msg = validate_shapefile_upload(soil_file)
+            landuse_valid, landuse_msg = validate_shapefile_upload(landuse_file)
+
+            warning_messages = []
+            if not soil_valid and "Missing required" in soil_msg:
+                warning_messages.append(f"Soil file: {soil_msg}")
+            if not landuse_valid and "Missing required" in landuse_msg:
+                warning_messages.append(f"Land use file: {landuse_msg}")
+
+        if use_gcn10 and not run_user_cn and watershed_file is None:
+            return build_result(status_message=(
+                "GCN10 needs a boundary to clip to. Upload a watershed boundary "
+                "layer, or also enable CN generation from your own data."))
+
+        # Load the watershed layer once; both workflows can use it
         watershed_gdf = None
-        excel_output = None
-        if watershed_file is not None and watershed_field:
+        if watershed_file is not None:
             try:
-                update_progress(progress, 0.86, "Calculating watershed statistics")
                 watershed_gdf = gpd.read_file(watershed_file.name)
-                watershed_stats_df = CNStatistics.calculate_zonal_statistics(
-                    raster_path, watershed_gdf, watershed_field
-                )
-                # CSV download is handled in visualization.py
-                excel_output = None
             except Exception as e:
-                print(f"Warning: Could not process watershed file: {str(e)}")
-        
-        # Create visualizations - now returns HTML for leafmap
-        update_progress(progress, 0.92, "Building map and report")
+                return build_result(status_message=f"Error reading watershed file: {str(e)}")
+
+        # ---------- User CN workflow ----------
+        dissolved_gdf = None
+        raster_path = None
+        vector_path = None
+        global_stats = None
+        watershed_stats_df = None
+        excel_output = None
+
+        if run_user_cn:
+            # Initialize calculator
+            calc = CurveNumberCalculator(
+                crs=f"EPSG:{crs_epsg}",
+                use_parallel=True
+            )
+
+            # Load data
+            update_progress(progress, 0.10, "Loading soil and land use layers")
+            try:
+                soil_gdf = gpd.read_file(soil_file.name)
+            except Exception as e:
+                return build_result(status_message=f"Error reading soil file: {str(e)}")
+
+            try:
+                landuse_gdf = gpd.read_file(landuse_file.name)
+            except Exception as e:
+                return build_result(status_message=f"Error reading land use file: {str(e)}")
+
+            # Load lookup table
+            update_progress(progress, 0.18, "Loading curve number lookup table")
+            if use_nlcd:
+                lookup_df = calc.load_lookup_table(use_nlcd=True)
+            else:
+                if lookup_file is None:
+                    return build_result(status_message="Please provide a lookup table or enable NLCD option")
+                lookup_df = calc.load_lookup_table(lookup_path=lookup_file.name)
+
+            # Preprocess data and track missing hydrogroup values
+            update_progress(progress, 0.26, "Preparing soil and land use attributes")
+            replacements = {
+                'A/D': replacement_ad,
+                'B/D': replacement_bd,
+                'C/D': replacement_cd
+            }
+
+            # Count missing hydrogroup values before preprocessing
+            original_soil_gdf = soil_gdf.copy()
+            valid_groups = ['A', 'B', 'C', 'D', 'A/D', 'B/D', 'C/D']
+            missing_hydrogroup_count = (~original_soil_gdf[hydgrp_field].isin(valid_groups)).sum()
+
+            soil_gdf = calc.preprocess_soil_data(soil_gdf, hydgrp_field, replacements)
+            landuse_gdf = calc.preprocess_landuse_data(landuse_gdf, code_field)
+
+            # Compute intersection
+            update_progress(progress, 0.36, "Intersecting soil and land use polygons")
+            intersection_gdf = calc.compute_intersection(
+                soil_gdf, landuse_gdf, hydgrp_field, code_field
+            )
+
+            # Assign curve numbers
+            update_progress(progress, 0.46, "Assigning curve numbers")
+            cn_gdf = calc.assign_curve_numbers(
+                intersection_gdf, lookup_df, hydgrp_field, code_field
+            )
+
+            # Dissolve by CN
+            update_progress(progress, 0.52, "Dissolving polygons by curve number")
+            dissolved_gdf = calc.dissolve_by_cn(cn_gdf)
+
+            # Create raster - use a specific filename to avoid conflicts
+            raster_filename = f"cn_raster_{os.getpid()}_{hash(str(dissolved_gdf.bounds.iloc[0]) if len(dissolved_gdf) > 0 else 'empty')}.tif"
+            raster_path = os.path.join(tempfile.gettempdir(), raster_filename)
+
+            update_progress(progress, 0.58, "Creating CN raster")
+            raster_path = SpatialOperations.create_cn_raster(
+                dissolved_gdf, cell_size, raster_path
+            )
+
+            # Calculate statistics
+            update_progress(progress, 0.64, "Calculating summary statistics")
+            global_stats = CNStatistics.calculate_global_stats(dissolved_gdf)
+            # Add missing hydrogroup count to stats
+            global_stats['missing_hydrogroup_count'] = missing_hydrogroup_count
+
+            # Process watersheds if provided
+            if watershed_gdf is not None and watershed_field:
+                try:
+                    update_progress(progress, 0.68, "Calculating watershed statistics")
+                    watershed_stats_df = CNStatistics.calculate_zonal_statistics(
+                        raster_path, watershed_gdf, watershed_field
+                    )
+                    # CSV download is handled in visualization.py
+                    excel_output = None
+                except Exception as e:
+                    print(f"Warning: Could not process watershed file: {str(e)}")
+
+        # ---------- GCN10 workflow ----------
+        gcn10_info = None
+        gcn10_raster_path = None
+        gcn10_csv_path = None
+        gcn10_watershed_stats = None
+        comparison_df = None
+        gcn10_label = None
+
+        if use_gcn10:
+            # Clip to the watershed when available, otherwise to the CN polygons
+            gcn10_aoi = watershed_gdf if watershed_gdf is not None else dissolved_gdf
+            if gcn10_aoi is None or len(gcn10_aoi) == 0:
+                return build_result(status_message=(
+                    "GCN10 needs a boundary to clip to, but no watershed layer or "
+                    "generated CN polygons were available."))
+
+            update_progress(progress, 0.72, "Reading GCN10 data from the online dataset")
+
+            def gcn10_progress(done, total):
+                fraction = 0.72 + 0.10 * (done / max(total, 1))
+                update_progress(progress, fraction, f"Reading GCN10 tile {done} of {total}")
+
+            gcn10_slug = gcn10.variant_slug(gcn10_hc, gcn10_arc, gcn10_drainage)
+            gcn10_out_path = os.path.join(
+                tempfile.gettempdir(), f"{gcn10_slug}_{os.getpid()}.tif"
+            )
+            gcn10_info = gcn10.fetch_gcn10_raster(
+                gcn10_aoi, gcn10_hc, gcn10_arc, gcn10_drainage,
+                gcn10_out_path, progress_callback=gcn10_progress
+            )
+            gcn10_raster_path = gcn10_info["path"]
+            gcn10_label = gcn10_info["label"]
+
+            # GCN10 zonal statistics per watershed on its native grid
+            if watershed_gdf is not None and watershed_field:
+                try:
+                    update_progress(progress, 0.84, "Calculating GCN10 watershed statistics")
+                    gcn10_watershed_stats = CNStatistics.calculate_zonal_statistics(
+                        gcn10_raster_path, watershed_gdf, watershed_field,
+                        nodata=gcn10.GCN10_NODATA
+                    )
+                    gcn10_csv_filename = f"{gcn10_slug}_watershed_statistics_{os.getpid()}.csv"
+                    gcn10_csv_path = os.path.join(tempfile.gettempdir(), gcn10_csv_filename)
+                    gcn10_watershed_stats.to_csv(gcn10_csv_path, index=False)
+                except Exception as e:
+                    print(f"Warning: Could not compute GCN10 watershed statistics: {str(e)}")
+
+            # Comparison table when both sources were processed
+            if watershed_stats_df is not None and gcn10_watershed_stats is not None:
+                comparison_df = CNStatistics.build_comparison_table(
+                    watershed_stats_df, gcn10_watershed_stats, watershed_field
+                )
+
+        # ---------- Map and report ----------
+        update_progress(progress, 0.90, "Building map and report")
+
+        # Use GCN10 means for map labels when the user CN stats are not available
+        map_watershed_stats = watershed_stats_df if watershed_stats_df is not None else gcn10_watershed_stats
+
         map_html = CNVisualization.create_leafmap(
-            dissolved_gdf, raster_path, watershed_gdf, watershed_field, watershed_stats_df
+            dissolved_gdf, raster_path, watershed_gdf, watershed_field,
+            map_watershed_stats,
+            gcn10_raster_path=gcn10_raster_path,
+            gcn10_label=gcn10_label,
         )
-        
+
         # Create summary report
         report_html = CNVisualization.create_summary_report(
-            dissolved_gdf, global_stats, watershed_stats_df, excel_output
+            dissolved_gdf, global_stats, watershed_stats_df, excel_output,
+            gcn10_info=gcn10_info,
+            gcn10_watershed_stats=gcn10_watershed_stats,
+            comparison_stats=comparison_df,
+            watershed_field=watershed_field,
         )
-        
+
         # Save outputs - create unique filenames and ensure files are properly closed
-        vector_filename = f"cn_polygons_{os.getpid()}_{hash(str(dissolved_gdf.bounds.iloc[0]) if len(dissolved_gdf) > 0 else 'empty')}.gpkg"
-        vector_path = os.path.join(tempfile.gettempdir(), vector_filename)
-        
-        # Save the vector file and ensure it's closed properly
-        try:
-            update_progress(progress, 0.97, "Saving downloadable files")
-            dissolved_gdf.to_file(vector_path, driver='GPKG')
-            print(f"Saved vector output to: {vector_path}")
-        except Exception as e:
-            print(f"Error saving vector file: {str(e)}")
-            vector_path = None
-        
+        if dissolved_gdf is not None:
+            vector_filename = f"cn_polygons_{os.getpid()}_{hash(str(dissolved_gdf.bounds.iloc[0]) if len(dissolved_gdf) > 0 else 'empty')}.gpkg"
+            vector_path = os.path.join(tempfile.gettempdir(), vector_filename)
+
+            # Save the vector file and ensure it's closed properly
+            try:
+                update_progress(progress, 0.97, "Saving downloadable files")
+                dissolved_gdf.to_file(vector_path, driver='GPKG')
+                print(f"Saved vector output to: {vector_path}")
+            except Exception as e:
+                print(f"Error saving vector file: {str(e)}")
+                vector_path = None
+
         # Calculate total processing time
         end_time = time.time()
         processing_time = end_time - start_time
         time_display = f"Processing completed in {processing_time:.1f} seconds"
         update_progress(progress, 1.0, "Processing complete")
-        
-        return vector_path, raster_path, report_html, map_html, excel_output, time_display
-        
+
+        return build_result(
+            vector_path=vector_path,
+            raster_path=raster_path,
+            report_html=report_html,
+            map_html=map_html,
+            excel_output=excel_output,
+            gcn10_raster_path=gcn10_raster_path,
+            gcn10_csv_path=gcn10_csv_path,
+            status_message=time_display,
+        )
+
     except Exception as e:
         import traceback
         traceback.print_exc()
         end_time = time.time()
         processing_time = end_time - start_time
         error_display = f"Error occurred after {processing_time:.1f} seconds: {str(e)}"
-        return None, None, None, f"Error: {str(e)}", None, error_display
+        return build_result(status_message=error_display)
 
 # Create Gradio interface
 def create_interface():
@@ -640,8 +753,10 @@ def create_interface():
                 <li><strong>Upload your soil and land use shapefiles</strong> (zip files)</li>
                 <li><strong>Configure field mappings</strong> and parameters</li>
                 <li><strong>Optionally add watershed boundaries</strong> for zonal statistics (zip file)</li>
+                <li><strong>Optionally enable GCN10</strong> to view and download the global 10 m Curve Number dataset for your watershed and compare it with your results (needs internet)</li>
                 <li><strong>Click Calculate</strong> to generate curve numbers</li>
             </ol>
+            <p>You can also skip your own soil and land use data and run GCN10 alone. Uncheck the box at the top of Step 1, upload a watershed boundary, and enable GCN10 in Step 2.</p>
             
             <h3>Shapefile Upload Requirements</h3>
             <p>For shapefiles, ensure you upload ALL required components:</p>
@@ -675,7 +790,13 @@ def create_interface():
                         Start with ZIP shapefiles that include <code>.shp</code>, <code>.shx</code>, <code>.dbf</code>, and <code>.prj</code>, or upload GeoPackage/GeoJSON files.
                     </div>
                     """)
-                
+
+                    run_user_cn = gr.Checkbox(
+                        label="Generate CN from my soil and land use data",
+                        value=True,
+                        info="Uncheck to skip this workflow and use only the GCN10 global dataset (enable it in Step 2). GCN10-only runs need a watershed boundary."
+                    )
+
                     soil_file = gr.File(
                         label="1. Soil Layer",
                         elem_id="soil_input"
@@ -815,7 +936,43 @@ def create_interface():
                         inputs=[watershed_file],
                         outputs=[watershed_field]
                     )
-        
+
+                    gr.HTML('<div class="workflow-subhead">GCN10 Global Dataset (Optional)</div>')
+
+                    use_gcn10 = gr.Checkbox(
+                        label="Include GCN10 global Curve Number data",
+                        value=False,
+                        info="Streams the global 10 m Curve Number dataset (Azzam and Cho, 2026) for your area so you can view it, download it, and compare it with your results. Needs an internet connection during processing."
+                    )
+
+                    with gr.Group(visible=False) as gcn10_options:
+                        gcn10_hc = gr.Dropdown(
+                            label="Hydrologic Condition",
+                            choices=list(gcn10.HYDROLOGIC_CONDITIONS.keys()),
+                            value="Fair",
+                            info="Vegetative cover condition assumed in the GCN10 lookup"
+                        )
+
+                        gcn10_arc = gr.Dropdown(
+                            label="Antecedent Runoff Condition",
+                            choices=list(gcn10.ARC_CONDITIONS.keys()),
+                            value="ARC II",
+                            info="ARC II is the standard average condition"
+                        )
+
+                        gcn10_drainage = gr.Dropdown(
+                            label="Dual Soil Group Drainage",
+                            choices=list(gcn10.DRAINAGE_CONDITIONS.keys()),
+                            value="Undrained",
+                            info="How GCN10 interprets dual groups such as A/D: Drained uses the first letter, Undrained uses D"
+                        )
+
+                    use_gcn10.change(
+                        fn=lambda enabled: gr.update(visible=enabled),
+                        inputs=[use_gcn10],
+                        outputs=[gcn10_options]
+                    )
+
         calculate_btn = gr.Button("Calculate Curve Numbers", variant="primary", size="lg")
         
         # Processing status display
@@ -828,57 +985,62 @@ def create_interface():
             vector_output = gr.File(label="CN Polygons (GeoPackage)", visible=False)
             raster_output = gr.File(label="CN Raster (GeoTIFF)", visible=False)
             watershed_excel_output = gr.File(label="Watershed Statistics (Excel)", visible=False)
-        
+            gcn10_raster_output = gr.File(label="GCN10 Raster (GeoTIFF)", visible=False)
+            gcn10_csv_output = gr.File(label="GCN10 Watershed Statistics (CSV)", visible=False)
+
         # Report above map
         report_output = gr.HTML(label="Analysis Report", visible=False)
-        
+
         # Map with increased height
         map_output = gr.HTML(label="Interactive Map", elem_classes="map-container", visible=False)
-        
+
         def update_outputs(*args, progress=gr.Progress(track_tqdm=True)):
             # Show processing status
             yield (
                 gr.update(),  # vector_output
-                gr.update(),  # raster_output  
+                gr.update(),  # raster_output
                 gr.update(),  # report_output
                 gr.update(),  # map_output
                 gr.update(),  # watershed_excel_output
+                gr.update(),  # gcn10_raster_output
+                gr.update(),  # gcn10_csv_output
                 gr.update(value='<div class="processing-status">Processing started. Progress details will appear above while the app runs.</div>', visible=True)  # status
             )
-            
+
             # Run the actual processing
             results = process_curve_numbers(*args, progress=progress)
-            vector_path, raster_path, report_html, map_html, excel_path, time_display = results
-            
-            # Show/hide Excel output based on whether watersheds were processed
-            excel_visible = excel_path is not None
-            
-            # Determine status class based on results
-            if vector_path is not None:
-                status_class = "processing-status processing-complete"
-            else:
-                status_class = "processing-status processing-error"
-            
+            (vector_path, raster_path, report_html, map_html, excel_path,
+             gcn10_raster_path, gcn10_csv_path, time_display) = results
+
+            # Anything produced this run gets shown; the rest stays hidden
+            succeeded = vector_path is not None or gcn10_raster_path is not None
+            status_class = "processing-status processing-complete" if succeeded else "processing-status processing-error"
+
             # Return final results
             yield (
-                gr.update(value=vector_path, visible=True), 
-                gr.update(value=raster_path, visible=True), 
-                gr.update(value=report_html, visible=True), 
-                gr.update(value=map_html, visible=True), 
-                gr.update(value=excel_path, visible=excel_visible),
+                gr.update(value=vector_path, visible=vector_path is not None),
+                gr.update(value=raster_path, visible=raster_path is not None),
+                gr.update(value=report_html, visible=report_html is not None),
+                gr.update(value=map_html, visible=map_html is not None),
+                gr.update(value=excel_path, visible=excel_path is not None),
+                gr.update(value=gcn10_raster_path, visible=gcn10_raster_path is not None),
+                gr.update(value=gcn10_csv_path, visible=gcn10_csv_path is not None),
                 gr.update(value=f'<div class="{status_class}">{time_display}</div>', visible=True)
             )
-        
+
         calculate_btn.click(
             fn=update_outputs,
             inputs=[
                 soil_file, landuse_file, hydgrp_field, code_field,
                 lookup_file, use_nlcd, crs_epsg, cell_size,
                 replacement_ad, replacement_bd, replacement_cd,
-                watershed_file, watershed_field
+                watershed_file, watershed_field,
+                run_user_cn, use_gcn10, gcn10_hc, gcn10_arc, gcn10_drainage
             ],
             outputs=[
-                vector_output, raster_output, report_output, map_output, watershed_excel_output, status_display
+                vector_output, raster_output, report_output, map_output,
+                watershed_excel_output, gcn10_raster_output, gcn10_csv_output,
+                status_display
             ]
         )
         
@@ -893,6 +1055,18 @@ def create_interface():
         - **Antecedent Moisture**: Soil wetness before rainfall
 
         **CN Values**: Range from 30 (low runoff) to 100 (impervious surfaces)
+
+        ### About the GCN10 Dataset
+
+        The optional GCN10 layer comes from the Global Curve Number 10m dataset by Muhammad Abdullah Azzam and Huidae Cho
+        (New Mexico State University). It combines ESA WorldCover 2021 land cover with HYSOGs250m hydrologic soil groups
+        to produce global 10 m Curve Number rasters for multiple hydrologic conditions, antecedent runoff conditions, and
+        drainage assumptions. The data is distributed under the Open Data Commons Open Database License (ODbL) v1.0.
+
+        - Dataset: [GCN10 -- Global 10 m Curve Number Dataset (Azzam et al.)](https://hydro.nmsu.edu/datasets/gcn10/)
+        - Citation: Azzam, M. A., Cho, H., 2026. GCN10: An MPI-parallelized framework for processing global curve number
+          rasters for hydrologic modeling. SoftwareX 34, 102725. [doi:10.1016/j.softx.2026.102725](https://doi.org/10.1016/j.softx.2026.102725)
+        - Software: [github.com/clawrim/gcn10](https://github.com/clawrim/gcn10)
 
         ### Helpful Resources
 

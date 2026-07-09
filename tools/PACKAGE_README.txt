@@ -32,10 +32,26 @@ If you want a folder shortcut and Desktop shortcut, double-click:
 
 Create_Shortcuts.bat
 
+GCN10 global dataset (optional)
+
+The app can also read the GCN10 global 10 m Curve Number dataset for your
+watershed. Enable it in Step 2 of the app. You can view the GCN10 layer on the
+map, download the clipped GeoTIFF, download watershed statistics, and compare
+GCN10 with your own results. This option needs an internet connection while
+processing. Everything else works offline.
+
+GCN10 credit: GCN10 -- Global 10 m Curve Number Dataset (Azzam et al.),
+https://hydro.nmsu.edu/datasets/gcn10/, ODbL v1.0 license.
+Citation: Azzam, M. A., Cho, H., 2026. GCN10: An MPI-parallelized framework
+for processing global curve number rasters for hydrologic modeling.
+SoftwareX 34, 102725.
+
 Notes
 
 - The app runs locally on your computer.
 - It does not upload your GIS files to a public server.
+- The optional GCN10 feature downloads only the small part of the dataset
+  that covers your watershed.
 - The _internal folder contains bundled app files. It is hidden because most users do not need to open it.
 - If the app does not start, move the folder to a simple path such as C:\CN_Generator and try again.
 

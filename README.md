@@ -87,14 +87,14 @@ Install the developer/build dependencies:
 Build the package:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\build_windows_package.ps1 -Version 0.1
+powershell -ExecutionPolicy Bypass -File tools\build_windows_package.ps1 -Version 0.2
 ```
 
 The build creates:
 
 ```text
-release/CN_Generator_Windows_0.1/
-release/CN_Generator_Windows_0.1.zip
+release/CN_Generator_Windows_0.2/
+release/CN_Generator_Windows_0.2.zip
 ```
 
 Upload the zip file to a GitHub Release so non-developer users can download it.
@@ -105,8 +105,33 @@ Upload the zip file to a GitHub Release so non-developer users can download it.
 - Use the built-in NLCD lookup or provide a custom CSV lookup table.
 - Automatically handle CRS mismatch and dual hydrologic groups such as `A/D`, `B/D`, and `C/D`.
 - Optionally upload watershed boundaries to compute zonal statistics per basin.
+- Optionally view, download, and compare against the GCN10 global 10 m Curve Number dataset.
 - View an interactive map and HTML report.
 - Export CN polygons as GeoPackage and CN raster as GeoTIFF.
+
+## GCN10 Global Dataset (Optional)
+
+The app can read the GCN10 global 10 m Curve Number dataset for your watershed. GCN10 was built by Muhammad Abdullah Azzam and Huidae Cho at New Mexico State University from ESA WorldCover 2021 land cover and HYSOGs250m hydrologic soil groups.
+
+When you enable the GCN10 option in Step 2 you can:
+
+- Pick the hydrologic condition (Poor, Fair, Good), antecedent runoff condition (ARC I, II, III), and drainage assumption (Drained, Undrained). The defaults are Fair, ARC II, Undrained.
+- See the GCN10 raster on the interactive map and turn it on or off with the layer control.
+- Download the GCN10 raster clipped to your watershed as a GeoTIFF.
+- Download GCN10 watershed statistics as a CSV file.
+- Compare your generated CN values with GCN10 side by side, per watershed, with a mean difference column.
+
+You can also run GCN10 alone without soil and land use data. Uncheck the box at the top of Step 1, upload a watershed boundary, and enable GCN10.
+
+A few things worth knowing:
+
+- The GCN10 option needs an internet connection while processing. The app streams only the small window of data that covers your watershed, so a typical run transfers a few megabytes and takes a few seconds. Everything else in the app works offline.
+- The GCN10 raster keeps its native 10 m grid in EPSG:4326 with NoData 255. Statistics for each product are computed on its own grid over the same watershed polygons, so nothing is resampled for the comparison.
+- GCN10 data is distributed under the Open Data Commons Open Database License (ODbL) v1.0. Public use of the data or products derived from it must credit "GCN10 -- Global 10 m Curve Number Dataset (Azzam et al.)".
+
+Dataset page: https://hydro.nmsu.edu/datasets/gcn10/
+
+Citation: Azzam, M. A., Cho, H., 2026. GCN10: An MPI-parallelized framework for processing global curve number rasters for hydrologic modeling. SoftwareX 34, 102725. https://doi.org/10.1016/j.softx.2026.102725
 
 ## Input Data Requirements
 
@@ -127,7 +152,8 @@ Upload the zip file to a GitHub Release so non-developer users can download it.
 8. Dissolve polygons by CN value and calculate area.
 9. Rasterize the CN polygons to GeoTIFF.
 10. Compute global and optional watershed zonal statistics.
-11. Build the report, interactive map, and downloadable outputs.
+11. When the GCN10 option is on, stream the GCN10 window covering the watershed, clip it to the boundary, compute the same watershed statistics on the native GCN10 grid, and build a comparison table.
+12. Build the report, interactive map, and downloadable outputs.
 
 ## Project Structure
 
@@ -143,11 +169,13 @@ Upload the zip file to a GitHub Release so non-developer users can download it.
 |   `-- CN_Generator.ico
 |-- data/
 |   |-- HUC10 Example/
+|   |-- gcn10/
 |   `-- lookup_tables/
 |-- src/
 |   |-- curve_number_calculator.py
 |   |-- spatial_operations.py
 |   |-- cn_statistics.py
+|   |-- gcn10.py
 |   `-- visualization.py
 `-- tools/
     |-- build_windows_package.ps1
@@ -172,4 +200,6 @@ This software is provided as-is, without warranty of any kind. Always verify res
 - USDA NRCS SCS Curve Number method
 - USACE HEC-HMS guidance for CN grids
 - National Land Cover Database
+- GCN10 -- Global 10 m Curve Number Dataset (Azzam et al.), https://hydro.nmsu.edu/datasets/gcn10/, ODbL v1.0
+- Azzam, M. A., Cho, H., 2026. GCN10: An MPI-parallelized framework for processing global curve number rasters for hydrologic modeling. SoftwareX 34, 102725
 - GeoPandas, Rasterio, rasterstats, Folium, and Gradio
