@@ -35,10 +35,16 @@ Create_Shortcuts.bat
 GCN10 global dataset (optional)
 
 The app can also read the GCN10 global 10 m Curve Number dataset for your
-watershed. Enable it in Step 2 of the app. You can view the GCN10 layer on the
-map, download the clipped GeoTIFF, download watershed statistics, and compare
+watershed. It is on by default in tab 3 of the app; turn it off there if you
+do not have an internet connection. You can view the GCN10 layer on the map,
+download the clipped GeoTIFF, download watershed statistics, and compare
 GCN10 with your own results. This option needs an internet connection while
 processing. Everything else works offline.
+
+If you are on a company VPN or network that inspects secure traffic, the
+first GCN10 connection attempt may fail its certificate check. The app then
+retries once with certificate verification turned off and notes this in the
+run log. Your results are not affected.
 
 GCN10 credit: GCN10 -- Global 10 m Curve Number Dataset (Azzam et al.),
 https://hydro.nmsu.edu/datasets/gcn10/, ODbL v1.0 license.
@@ -48,6 +54,9 @@ SoftwareX 34, 102725.
 
 Notes
 
+- Every run saves its GIS outputs, statistics tables, and a model run log to
+  a Results folder next to CN_Generator.exe. The report and map are shown in
+  the app itself.
 - The app runs locally on your computer.
 - It does not upload your GIS files to a public server.
 - The optional GCN10 feature downloads only the small part of the dataset

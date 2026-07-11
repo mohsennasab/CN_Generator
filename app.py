@@ -6,7 +6,6 @@ Web application for calculating SCS Curve Numbers with open-source tools
 import gradio as gr
 import geopandas as gpd
 import pandas as pd
-import tempfile
 import os
 import base64
 import socket
@@ -19,8 +18,8 @@ from src.visualization import CNVisualization
 from src import gcn10
 import json
 import zipfile
-import shutil
 import time
+from datetime import datetime
 
 # Default configuration
 DEFAULT_CRS = "EPSG:4326"
@@ -28,6 +27,35 @@ DEFAULT_CELL_SIZE = 30  # meters, matches the native NLCD land cover resolution
 APP_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 LOGO_PATH = APP_DIR / "Logo" / "CN_Generator.png"
 ICON_PATH = APP_DIR / "Logo" / "CN_Generator.ico"
+
+
+def get_app_base_dir():
+    """Folder the app runs from: the exe folder when packaged, the source folder otherwise."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+RESULTS_ROOT = get_app_base_dir() / "Results"
+
+
+class RunLogger:
+    """Write timestamped run messages to a log file and mirror them to the console."""
+
+    def __init__(self, log_path):
+        self.log_path = Path(log_path)
+        self.start_time = time.time()
+
+    def log(self, message):
+        elapsed = time.time() - self.start_time
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        line = f"[{stamp}] [+{elapsed:7.1f}s] {message}"
+        print(line)
+        try:
+            with open(self.log_path, "a", encoding="utf-8") as log_file:
+                log_file.write(line + "\n")
+        except OSError:
+            pass
 
 
 def get_logo_data_uri():
@@ -61,9 +89,12 @@ def find_available_port(preferred_port=7860, host="127.0.0.1"):
         return sock.getsockname()[1]
 
 
-def update_progress(progress, value, message):
-    """Update Gradio's progress display and mirror the message to the app log."""
-    print(message)
+def update_progress(progress, value, message, logger=None):
+    """Update Gradio's progress display and mirror the message to the run log."""
+    if logger is not None:
+        logger.log(message)
+    else:
+        print(message)
     if progress is not None:
         progress(value, desc=message)
 
@@ -117,7 +148,7 @@ def validate_shapefile_upload(file):
                     return False, f"Missing required shapefile components: {', '.join(missing)}"
         
         # For individual file uploads, provide guidance
-        elif file.name.endswith(('.shp', '.gpkg', '.geojson')):
+        elif file.name.endswith(('.shp', '.gpkg', '.geojson', '.json')):
             if file.name.endswith('.shp'):
                 return True, "Note: For shapefiles, ensure you also have .shx, .dbf, and .prj files. Consider uploading as a ZIP archive containing all components."
             else:
@@ -169,20 +200,39 @@ def process_curve_numbers(
 
     start_time = time.time()
 
+    # Every run gets its own folder inside Results, next to the app
+    run_stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    run_dir = RESULTS_ROOT / f"Run_{run_stamp}"
     try:
-        update_progress(progress, 0.03, "Validating inputs")
+        run_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return build_result(status_message=(
+            f"Could not create the results folder at {run_dir}: {e}"))
+
+    logger = RunLogger(run_dir / f"model_run_log_{run_stamp}.txt")
+    logger.log("CN Generator model run started")
+    logger.log(f"Results folder: {run_dir}")
+
+    try:
+        update_progress(progress, 0.03, "Validating inputs", logger)
+        logger.log(f"User CN workflow enabled: {run_user_cn}")
+        logger.log(f"GCN10 workflow enabled: {use_gcn10}")
 
         if not run_user_cn and not use_gcn10:
+            logger.log("Nothing to process: both workflows are disabled")
             return build_result(status_message=(
-                "Nothing to process. Enable at least one data source: generate CN "
-                "from your own soil and land use data, or use the GCN10 dataset."))
+                "Nothing to process. Enable at least one workflow: generate CN "
+                "from your own soil and land use data (tab 2), or include the "
+                "GCN10 global dataset (tab 3)."))
 
         # Validate inputs for the user CN workflow
         if run_user_cn:
             if soil_file is None:
-                return build_result(status_message="Please upload a soil shapefile")
+                logger.log("Run stopped: no soil layer uploaded")
+                return build_result(status_message="Please upload a soil layer in tab 2")
             if landuse_file is None:
-                return build_result(status_message="Please upload a land use shapefile")
+                logger.log("Run stopped: no land use layer uploaded")
+                return build_result(status_message="Please upload a land use layer in tab 2")
 
             # Validate shapefile uploads (only show warnings, don't block processing)
             soil_valid, soil_msg = validate_shapefile_upload(soil_file)
@@ -195,16 +245,21 @@ def process_curve_numbers(
                 warning_messages.append(f"Land use file: {landuse_msg}")
 
         if use_gcn10 and not run_user_cn and watershed_file is None:
+            logger.log("Run stopped: GCN10-only run without a watershed boundary")
             return build_result(status_message=(
                 "GCN10 needs a boundary to clip to. Upload a watershed boundary "
-                "layer, or also enable CN generation from your own data."))
+                "layer in the Input Data tab (tab 1), or also enable CN "
+                "generation from your own data (tab 2)."))
 
         # Load the watershed layer once; both workflows can use it
         watershed_gdf = None
         if watershed_file is not None:
             try:
+                logger.log(f"Reading watershed boundary layer: {watershed_file.name}")
                 watershed_gdf = gpd.read_file(watershed_file.name)
+                logger.log(f"Watershed layer loaded: {len(watershed_gdf)} polygons")
             except Exception as e:
+                logger.log(f"ERROR reading watershed file: {str(e)}")
                 return build_result(status_message=f"Error reading watershed file: {str(e)}")
 
         # ---------- User CN workflow ----------
@@ -223,28 +278,35 @@ def process_curve_numbers(
             )
 
             # Load data
-            update_progress(progress, 0.10, "Loading soil and land use layers")
+            update_progress(progress, 0.10, "Loading soil and land use layers", logger)
             try:
+                logger.log(f"Reading soil layer: {soil_file.name}")
                 soil_gdf = gpd.read_file(soil_file.name)
+                logger.log(f"Soil layer loaded: {len(soil_gdf)} polygons")
             except Exception as e:
+                logger.log(f"ERROR reading soil file: {str(e)}")
                 return build_result(status_message=f"Error reading soil file: {str(e)}")
 
             try:
+                logger.log(f"Reading land use layer: {landuse_file.name}")
                 landuse_gdf = gpd.read_file(landuse_file.name)
+                logger.log(f"Land use layer loaded: {len(landuse_gdf)} polygons")
             except Exception as e:
+                logger.log(f"ERROR reading land use file: {str(e)}")
                 return build_result(status_message=f"Error reading land use file: {str(e)}")
 
             # Load lookup table
-            update_progress(progress, 0.18, "Loading curve number lookup table")
+            update_progress(progress, 0.18, "Loading curve number lookup table", logger)
             if use_nlcd:
                 lookup_df = calc.load_lookup_table(use_nlcd=True)
             else:
                 if lookup_file is None:
+                    logger.log("Run stopped: no lookup table provided")
                     return build_result(status_message="Please provide a lookup table or enable NLCD option")
                 lookup_df = calc.load_lookup_table(lookup_path=lookup_file.name)
 
             # Preprocess data and track missing hydrogroup values
-            update_progress(progress, 0.26, "Preparing soil and land use attributes")
+            update_progress(progress, 0.26, "Preparing soil and land use attributes", logger)
             replacements = {
                 'A/D': replacement_ad,
                 'B/D': replacement_bd,
@@ -260,32 +322,32 @@ def process_curve_numbers(
             landuse_gdf = calc.preprocess_landuse_data(landuse_gdf, code_field)
 
             # Compute intersection
-            update_progress(progress, 0.36, "Intersecting soil and land use polygons")
+            update_progress(progress, 0.36, "Intersecting soil and land use polygons", logger)
             intersection_gdf = calc.compute_intersection(
                 soil_gdf, landuse_gdf, hydgrp_field, code_field
             )
 
             # Assign curve numbers
-            update_progress(progress, 0.46, "Assigning curve numbers")
+            update_progress(progress, 0.46, "Assigning curve numbers", logger)
             cn_gdf = calc.assign_curve_numbers(
                 intersection_gdf, lookup_df, hydgrp_field, code_field
             )
 
             # Dissolve by CN
-            update_progress(progress, 0.52, "Dissolving polygons by curve number")
+            update_progress(progress, 0.52, "Dissolving polygons by curve number", logger)
             dissolved_gdf = calc.dissolve_by_cn(cn_gdf)
 
-            # Create raster - use a specific filename to avoid conflicts
-            raster_filename = f"cn_raster_{os.getpid()}_{hash(str(dissolved_gdf.bounds.iloc[0]) if len(dissolved_gdf) > 0 else 'empty')}.tif"
-            raster_path = os.path.join(tempfile.gettempdir(), raster_filename)
+            # Create raster in this run's results folder
+            raster_path = str(run_dir / "cn_raster.tif")
 
-            update_progress(progress, 0.58, "Creating CN raster")
+            update_progress(progress, 0.58, "Creating CN raster", logger)
             raster_path = SpatialOperations.create_cn_raster(
                 dissolved_gdf, cell_size, raster_path
             )
+            logger.log(f"CN raster saved: {raster_path}")
 
             # Calculate statistics
-            update_progress(progress, 0.64, "Calculating summary statistics")
+            update_progress(progress, 0.64, "Calculating summary statistics", logger)
             global_stats = CNStatistics.calculate_global_stats(dissolved_gdf)
             # Add missing hydrogroup count to stats
             global_stats['missing_hydrogroup_count'] = missing_hydrogroup_count
@@ -293,14 +355,16 @@ def process_curve_numbers(
             # Process watersheds if provided
             if watershed_gdf is not None and watershed_field:
                 try:
-                    update_progress(progress, 0.68, "Calculating watershed statistics")
+                    update_progress(progress, 0.68, "Calculating watershed statistics", logger)
                     watershed_stats_df = CNStatistics.calculate_zonal_statistics(
                         raster_path, watershed_gdf, watershed_field
                     )
-                    # CSV download is handled in visualization.py
-                    excel_output = None
+                    # Save the per-watershed table with the other results
+                    excel_output = str(run_dir / "watershed_statistics.csv")
+                    watershed_stats_df.to_csv(excel_output, index=False)
+                    logger.log(f"Watershed statistics saved: {excel_output}")
                 except Exception as e:
-                    print(f"Warning: Could not process watershed file: {str(e)}")
+                    logger.log(f"Warning: Could not process watershed file: {str(e)}")
 
         # ---------- GCN10 workflow ----------
         gcn10_info = None
@@ -314,40 +378,41 @@ def process_curve_numbers(
             # Clip to the watershed when available, otherwise to the CN polygons
             gcn10_aoi = watershed_gdf if watershed_gdf is not None else dissolved_gdf
             if gcn10_aoi is None or len(gcn10_aoi) == 0:
+                logger.log("Run stopped: GCN10 had no boundary to clip to")
                 return build_result(status_message=(
                     "GCN10 needs a boundary to clip to, but no watershed layer or "
                     "generated CN polygons were available."))
 
-            update_progress(progress, 0.72, "Reading GCN10 data from the online dataset")
+            update_progress(progress, 0.72, "Reading GCN10 data from the online dataset", logger)
 
             def gcn10_progress(done, total):
                 fraction = 0.72 + 0.10 * (done / max(total, 1))
-                update_progress(progress, fraction, f"Reading GCN10 tile {done} of {total}")
+                update_progress(progress, fraction, f"Reading GCN10 tile {done} of {total}", logger)
 
             gcn10_slug = gcn10.variant_slug(gcn10_hc, gcn10_arc, gcn10_drainage)
-            gcn10_out_path = os.path.join(
-                tempfile.gettempdir(), f"{gcn10_slug}_{os.getpid()}.tif"
-            )
+            gcn10_out_path = str(run_dir / f"{gcn10_slug}.tif")
             gcn10_info = gcn10.fetch_gcn10_raster(
                 gcn10_aoi, gcn10_hc, gcn10_arc, gcn10_drainage,
-                gcn10_out_path, progress_callback=gcn10_progress
+                gcn10_out_path, progress_callback=gcn10_progress,
+                message_callback=logger.log
             )
             gcn10_raster_path = gcn10_info["path"]
             gcn10_label = gcn10_info["label"]
+            logger.log(f"GCN10 raster saved: {gcn10_raster_path}")
 
             # GCN10 zonal statistics per watershed on its native grid
             if watershed_gdf is not None and watershed_field:
                 try:
-                    update_progress(progress, 0.84, "Calculating GCN10 watershed statistics")
+                    update_progress(progress, 0.84, "Calculating GCN10 watershed statistics", logger)
                     gcn10_watershed_stats = CNStatistics.calculate_zonal_statistics(
                         gcn10_raster_path, watershed_gdf, watershed_field,
                         nodata=gcn10.GCN10_NODATA
                     )
-                    gcn10_csv_filename = f"{gcn10_slug}_watershed_statistics_{os.getpid()}.csv"
-                    gcn10_csv_path = os.path.join(tempfile.gettempdir(), gcn10_csv_filename)
+                    gcn10_csv_path = str(run_dir / f"{gcn10_slug}_watershed_statistics.csv")
                     gcn10_watershed_stats.to_csv(gcn10_csv_path, index=False)
+                    logger.log(f"GCN10 watershed statistics saved: {gcn10_csv_path}")
                 except Exception as e:
-                    print(f"Warning: Could not compute GCN10 watershed statistics: {str(e)}")
+                    logger.log(f"Warning: Could not compute GCN10 watershed statistics: {str(e)}")
 
             # Comparison table when both sources were processed
             if watershed_stats_df is not None and gcn10_watershed_stats is not None:
@@ -356,16 +421,14 @@ def process_curve_numbers(
                 )
 
         # ---------- Map and report ----------
-        update_progress(progress, 0.90, "Building map and report")
-
-        # Use GCN10 means for map labels when the user CN stats are not available
-        map_watershed_stats = watershed_stats_df if watershed_stats_df is not None else gcn10_watershed_stats
+        update_progress(progress, 0.90, "Building map and report", logger)
 
         map_html = CNVisualization.create_leafmap(
             dissolved_gdf, raster_path, watershed_gdf, watershed_field,
-            map_watershed_stats,
+            watershed_stats_df,
             gcn10_raster_path=gcn10_raster_path,
             gcn10_label=gcn10_label,
+            gcn10_watershed_stats=gcn10_watershed_stats,
         )
 
         # Create summary report
@@ -377,25 +440,29 @@ def process_curve_numbers(
             watershed_field=watershed_field,
         )
 
-        # Save outputs - create unique filenames and ensure files are properly closed
-        if dissolved_gdf is not None:
-            vector_filename = f"cn_polygons_{os.getpid()}_{hash(str(dissolved_gdf.bounds.iloc[0]) if len(dissolved_gdf) > 0 else 'empty')}.gpkg"
-            vector_path = os.path.join(tempfile.gettempdir(), vector_filename)
+        # The summary report is shown in the app only; it is not saved to disk
 
-            # Save the vector file and ensure it's closed properly
+        # Save the CN polygons in the run's results folder
+        if dissolved_gdf is not None:
+            vector_path = str(run_dir / "cn_polygons.gpkg")
             try:
-                update_progress(progress, 0.97, "Saving downloadable files")
+                update_progress(progress, 0.97, "Saving downloadable files", logger)
                 dissolved_gdf.to_file(vector_path, driver='GPKG')
-                print(f"Saved vector output to: {vector_path}")
+                logger.log(f"CN polygons saved: {vector_path}")
             except Exception as e:
-                print(f"Error saving vector file: {str(e)}")
+                logger.log(f"Error saving vector file: {str(e)}")
                 vector_path = None
 
         # Calculate total processing time
         end_time = time.time()
         processing_time = end_time - start_time
-        time_display = f"Processing completed in {processing_time:.1f} seconds"
-        update_progress(progress, 1.0, "Processing complete")
+        time_display = (
+            f"Processing completed in {processing_time:.1f} seconds. "
+            f"Results saved to: {run_dir}"
+        )
+        update_progress(progress, 1.0, "Processing complete", logger)
+        logger.log(f"Model run finished in {processing_time:.1f} seconds")
+        logger.log(f"All results saved to: {run_dir}")
 
         return build_result(
             vector_path=vector_path,
@@ -413,7 +480,12 @@ def process_curve_numbers(
         traceback.print_exc()
         end_time = time.time()
         processing_time = end_time - start_time
-        error_display = f"Error occurred after {processing_time:.1f} seconds: {str(e)}"
+        logger.log(f"ERROR after {processing_time:.1f} seconds: {str(e)}")
+        logger.log(traceback.format_exc())
+        error_display = (
+            f"Error occurred after {processing_time:.1f} seconds: {str(e)}. "
+            f"See the run log in: {run_dir}"
+        )
         return build_result(status_message=error_display)
 
 # Create Gradio interface
@@ -488,30 +560,6 @@ def create_interface():
         font-weight: 600;
     }
 
-    .hero-actions {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        flex: 0 0 auto;
-    }
-
-    .coffee-button {
-        position: static;
-        display: inline-flex;
-        border-radius: 6px;
-        transition: transform 0.15s ease;
-    }
-
-    .coffee-button:hover {
-        transform: translateY(-1px);
-    }
-
-    .coffee-button img {
-        height: 44px !important;
-        width: 160px !important;
-        border-radius: 6px;
-    }
-
     @media (max-width: 640px) {
         .hero-card {
             padding: 16px;
@@ -530,19 +578,9 @@ def create_interface():
         .app-title h1 {
             font-size: 24px;
         }
-
-        .hero-actions {
-            width: 100%;
-        }
-
-        .coffee-button img {
-            height: 40px !important;
-            width: 146px !important;
-        }
     }
-    
+
     .map-container {
-        height: 800px !important;
         overflow: hidden;
     }
     
@@ -638,6 +676,56 @@ def create_interface():
         line-height: 1.45;
     }
 
+    .tip-line {
+        margin: 2px 0 10px 0;
+        font-size: 13px;
+        font-style: italic;
+        color: var(--body-text-color-subdued, var(--body-text-color));
+    }
+
+    /* Compact upload boxes: smaller drop zone that fits the single-column layout */
+    .compact-upload {
+        max-width: 560px;
+        margin-left: 0 !important;
+        margin-right: auto !important;
+    }
+
+    .compact-upload button.center {
+        min-height: 0 !important;
+        padding: 30px 12px 10px !important;
+        font-size: 13px;
+        align-items: flex-start !important;
+        text-align: left !important;
+    }
+
+    .compact-upload button.center .wrap {
+        min-height: 0 !important;
+        font-size: 13px;
+        align-items: flex-start !important;
+        text-align: left !important;
+    }
+
+    .compact-upload button.center:hover {
+        border-color: var(--button-primary-background-fill, #2f766d);
+        background: var(--input-background-fill);
+    }
+
+    .compact-upload .icon-wrap {
+        width: 24px !important;
+        height: 24px !important;
+        margin-bottom: 0 !important;
+    }
+
+    .next-row {
+        margin-top: 18px;
+        display: flex;
+        justify-content: flex-end;
+    }
+
+    .next-row button {
+        max-width: 320px;
+    }
+
     /* Tab styling: clear progression, no wasted vertical space */
     .workflow-tabs .tab-nav button,
     .workflow-tabs button[role="tab"] {
@@ -653,9 +741,6 @@ def create_interface():
         background: var(--block-background-fill);
     }
 
-    .calculate-row {
-        margin-top: 14px;
-    }
     """
     
     with gr.Blocks(
@@ -667,14 +752,6 @@ def create_interface():
         ),
         css=css
     ) as demo:
-        coffee_html = '''
-        <a class="coffee-button" href="https://buymeacoffee.com/hydromohsen" target="_blank" 
-           title="If you like the app and want to support the developer, consider clicking and buying Mohsen a coffee">
-            <img src="https://cdn.buymeacoffee.com/buttons/v2/default-orange.png" 
-                 alt="Buy Me A Coffee">
-        </a>
-        '''
-        
         logo_data_uri = get_logo_data_uri()
         logo_html = (
             f'<img class="app-logo" src="{logo_data_uri}" alt="CN Generator logo">'
@@ -694,9 +771,6 @@ def create_interface():
                     </div>
                 </div>
             </div>
-            <div class="hero-actions">
-                {coffee_html}
-            </div>
         </div>
         """)
         
@@ -707,22 +781,22 @@ def create_interface():
                 <div class="how-to-use">
                     <h3>How to Use</h3>
                     <ol>
-                        <li><strong>Input Data:</strong> upload your soil and land use layers (ZIP shapefiles) and check the field mappings</li>
-                        <li><strong>Processing Parameters:</strong> confirm the coordinate system, cell size, dual soil-group handling, and optional watershed boundaries</li>
-                        <li><strong>GCN10 Global Dataset:</strong> optionally add the global 10 m Curve Number dataset to view, download, and compare (needs internet)</li>
-                        <li><strong>Results:</strong> click Calculate and review the report, map, and downloads</li>
+                        <li><strong>Input Data:</strong> upload your watershed or subbasin boundaries. This single layer is shared by both workflows below: per-basin statistics for your own CN results and the clipping boundary for GCN10</li>
+                        <li><strong>CN from Soil &amp; Land Use (optional):</strong> upload your soil and land use layers, check the field mappings, and set the processing parameters (coordinate system, cell size, dual soil-group handling)</li>
+                        <li><strong>GCN10 Global Dataset (optional):</strong> add the global 10 m Curve Number dataset to view, download, and compare. It is on by default and needs internet; turn it off in tab 3 to run fully offline</li>
+                        <li><strong>Run &amp; Results:</strong> click Calculate Curve Numbers and review the report, map, and downloads. All output files are also saved to a Results folder next to the app, along with a model run log</li>
                     </ol>
-                    <p>You can also run GCN10 alone without soil and land use data. Uncheck the box in the Input Data tab, upload a watershed boundary in Processing Parameters, and enable GCN10 in its tab.</p>
+                    <p>Steps 2 and 3 are independent: run either one alone or both together to compare them. Enable at least one before calculating. Running GCN10 alone requires the watershed boundary from step 1.</p>
 
-                    <h3>Shapefile Upload Requirements</h3>
-                    <p>For shapefiles, ensure you upload ALL required components:</p>
+                    <h3>Supported Upload Formats</h3>
+                    <p>Every layer upload accepts a ZIP shapefile archive, a GeoPackage (<code>.gpkg</code>), or a GeoJSON (<code>.geojson</code>/<code>.json</code>) file.</p>
+                    <p>For shapefiles, the ZIP archive must include ALL required components:</p>
                     <ul>
                         <li><code>.shp</code> (geometry)</li>
                         <li><code>.shx</code> (index)</li>
                         <li><code>.dbf</code> (attributes)</li>
                         <li><code>.prj</code> (projection)</li>
                     </ul>
-                    <p><strong>Tip:</strong> Upload shapefiles as a ZIP archive containing all components for best results</p>
 
                     <div class="disclaimer">
                         <strong>Disclaimer:</strong><br>
@@ -732,62 +806,164 @@ def create_interface():
                 ''')
 
             with gr.Tab("1. Input Data", id="inputs") as tab_inputs:
+                gr.HTML("""
+                <div class="workflow-hint">
+                    Upload your watershed or subbasin boundaries here. This is the one shared input for
+                    both optional workflows: it provides per-basin CN statistics for your own soil and
+                    land use data (tab 2) and the clipping boundary for the GCN10 global dataset (tab 3).
+                    Accepted formats: ZIP shapefile archive (<code>.shp</code>, <code>.shx</code>,
+                    <code>.dbf</code>, <code>.prj</code>), GeoPackage (<code>.gpkg</code>), or GeoJSON
+                    (<code>.geojson</code>/<code>.json</code>).
+                </div>
+                """)
+
+                gr.HTML('<div class="workflow-subhead">1. Watershed / Subbasin Boundaries</div>')
+                gr.HTML('<div class="tip-line">Tip: this can be a single polygon for the whole watershed, or one layer with multiple polygons covering many subbasins.</div>')
+
+                watershed_file = gr.File(
+                    label="Watershed Boundaries (ZIP shapefile, GeoPackage, or GeoJSON)",
+                    file_types=[".zip", ".gpkg", ".geojson", ".json"],
+                    elem_id="watershed_input",
+                    elem_classes=["compact-upload"],
+                    height=150,
+                )
+
+                gr.HTML('<div class="workflow-subhead">2. Boundary Attributes</div>')
+
+                watershed_field = gr.Dropdown(
+                    label="Watershed Name/ID Field",
+                    choices=[],
+                    value=None,
+                    allow_custom_value=True,
+                    info="Select the field that identifies each watershed or subbasin. The list updates after upload."
+                )
+
+                with gr.Row(elem_classes=["next-row"]):
+                    next_btn_inputs = gr.Button("Next: CN from Soil & Land Use", variant="secondary")
+
+                watershed_file.change(
+                    fn=lambda file: get_column_options(
+                        file,
+                        preferred_names={"name", "watershed", "watershed_id", "huc", "huc_id", "huc8", "id"},
+                        fallback_value=None,
+                    ),
+                    inputs=[watershed_file],
+                    outputs=[watershed_field]
+                )
+
+            with gr.Tab("2. CN from Soil & Land Use (Optional)", id="usercn") as tab_usercn:
+                gr.HTML("""
+                <div class="workflow-hint">
+                    Generate Curve Numbers from your own soil and land use layers. This workflow is
+                    optional and independent of GCN10 (tab 3): enable either one or both.
+                </div>
+                """)
+
                 run_user_cn = gr.Checkbox(
                     label="Generate CN from my soil and land use data",
                     value=True,
-                    info="Uncheck to skip this workflow and use only the GCN10 global dataset (tab 3). GCN10-only runs need a watershed boundary (tab 2)."
+                    info="Uncheck to skip this workflow, e.g. to run only the GCN10 global dataset (tab 3). GCN10-only runs need the watershed boundary from tab 1."
                 )
 
-                with gr.Row(equal_height=False):
-                    with gr.Column(scale=1):
-                        gr.HTML('<div class="workflow-subhead">Data Layers</div>')
-                        gr.HTML("""
-                        <div class="workflow-hint">
-                            Upload ZIP shapefiles that include <code>.shp</code>, <code>.shx</code>, <code>.dbf</code>, and <code>.prj</code>, or GeoPackage/GeoJSON files. Field selectors update automatically after each upload.
-                        </div>
-                        """)
+                with gr.Group(visible=True) as user_cn_options:
+                    gr.HTML('<div class="workflow-subhead">1. Data Layers</div>')
+                    gr.HTML('<div class="tip-line">Upload ZIP shapefiles that include .shp, .shx, .dbf, and .prj, or GeoPackage/GeoJSON files. Field selectors update automatically after each upload.</div>')
 
-                        soil_file = gr.File(
-                            label="Soil Layer",
-                            elem_id="soil_input"
+                    soil_file = gr.File(
+                        label="Soil Layer",
+                        file_types=[".zip", ".gpkg", ".geojson", ".json"],
+                        elem_id="soil_input",
+                        elem_classes=["compact-upload"],
+                        height=150,
+                    )
+
+                    landuse_file = gr.File(
+                        label="Land Use Layer",
+                        file_types=[".zip", ".gpkg", ".geojson", ".json"],
+                        elem_id="landuse_input",
+                        elem_classes=["compact-upload"],
+                        height=150,
+                    )
+
+                    gr.HTML('<div class="workflow-subhead">2. Field Mapping</div>')
+
+                    hydgrp_field = gr.Dropdown(
+                        label="Soil Hydrologic Group Field",
+                        choices=["hydgrpdcd"],
+                        value="hydgrpdcd",
+                        allow_custom_value=True,
+                        info="Select the soil attribute containing A, B, C, D soil groups."
+                    )
+
+                    code_field = gr.Dropdown(
+                        label="Land Use Code Field",
+                        choices=["gridcode"],
+                        value="gridcode",
+                        allow_custom_value=True,
+                        info="Select the land use attribute containing numeric land use codes."
+                    )
+
+                    gr.HTML('<div class="workflow-subhead">3. Curve Number Lookup</div>')
+
+                    use_nlcd = gr.Checkbox(
+                        label="Use NLCD Lookup Table",
+                        value=True,
+                        info="Use built-in National Land Cover Database CN values. Uncheck to upload custom CSV lookup table."
+                    )
+
+                    lookup_file = gr.File(
+                        label="Custom Lookup Table (CSV)",
+                        visible=False,
+                        elem_classes=["compact-upload"],
+                        height=150,
+                    )
+
+                    gr.HTML('<div class="workflow-subhead">4. Raster Settings</div>')
+
+                    crs_epsg = gr.Number(
+                        label="Coordinate System (EPSG Code)",
+                        value=4326,
+                        info="e.g., 4326 for WGS84, 3857 for Web Mercator"
+                    )
+
+                    cell_size = gr.Number(
+                        label="Raster Cell Size (meters)",
+                        value=30,
+                        info="Output raster resolution. The default of 30 meters matches the native resolution of NLCD land cover. For EPSG:4326 the value is converted to degrees automatically; for other coordinate systems it is used directly in their map units."
+                    )
+
+                    gr.HTML('<div class="workflow-subhead">5. Dual Hydrologic Group Replacements</div>')
+
+                    with gr.Row():
+                        replacement_ad = gr.Dropdown(
+                            label="Replace A/D with",
+                            choices=["A", "B", "C", "D"],
+                            value="D",
+                            info="For dual group A/D soils"
                         )
 
-                        landuse_file = gr.File(
-                            label="Land Use Layer",
-                            elem_id="landuse_input"
+                        replacement_bd = gr.Dropdown(
+                            label="Replace B/D with",
+                            choices=["A", "B", "C", "D"],
+                            value="D",
+                            info="For dual group B/D soils"
                         )
 
-                    with gr.Column(scale=1):
-                        gr.HTML('<div class="workflow-subhead">Field Mapping</div>')
-
-                        hydgrp_field = gr.Dropdown(
-                            label="Soil Hydrologic Group Field",
-                            choices=["hydgrpdcd"],
-                            value="hydgrpdcd",
-                            allow_custom_value=True,
-                            info="Select the soil attribute containing A, B, C, D soil groups."
+                        replacement_cd = gr.Dropdown(
+                            label="Replace C/D with",
+                            choices=["A", "B", "C", "D"],
+                            value="D",
+                            info="For dual group C/D soils"
                         )
 
-                        code_field = gr.Dropdown(
-                            label="Land Use Code Field",
-                            choices=["gridcode"],
-                            value="gridcode",
-                            allow_custom_value=True,
-                            info="Select the land use attribute containing numeric land use codes."
-                        )
+                with gr.Row(elem_classes=["next-row"]):
+                    next_btn_usercn = gr.Button("Next: GCN10 Global Dataset", variant="secondary")
 
-                        gr.HTML('<div class="workflow-subhead">Curve Number Lookup</div>')
-
-                        use_nlcd = gr.Checkbox(
-                            label="Use NLCD Lookup Table",
-                            value=True,
-                            info="Use built-in National Land Cover Database CN values. Uncheck to upload custom CSV lookup table."
-                        )
-
-                        lookup_file = gr.File(
-                            label="Custom Lookup Table (CSV)",
-                            visible=False
-                        )
+                run_user_cn.change(
+                    fn=lambda enabled: gr.update(visible=enabled),
+                    inputs=[run_user_cn],
+                    outputs=[user_cn_options]
+                )
 
                 soil_file.change(
                     fn=lambda file: get_column_options(
@@ -815,92 +991,20 @@ def create_interface():
                     outputs=[lookup_file]
                 )
 
-            with gr.Tab("2. Processing Parameters", id="params") as tab_params:
-                with gr.Row(equal_height=False):
-                    with gr.Column(scale=1):
-                        gr.HTML('<div class="workflow-subhead">Raster Settings</div>')
-
-                        crs_epsg = gr.Number(
-                            label="Coordinate System (EPSG Code)",
-                            value=4326,
-                            info="e.g., 4326 for WGS84, 3857 for Web Mercator"
-                        )
-
-                        cell_size = gr.Number(
-                            label="Raster Cell Size (meters)",
-                            value=30,
-                            info="Output raster resolution. The default of 30 meters matches the native resolution of NLCD land cover. For EPSG:4326 the value is converted to degrees automatically; for other coordinate systems it is used directly in their map units."
-                        )
-
-                        gr.HTML('<div class="workflow-subhead">Dual Hydrologic Group Replacements</div>')
-
-                        with gr.Row():
-                            replacement_ad = gr.Dropdown(
-                                label="Replace A/D with",
-                                choices=["A", "B", "C", "D"],
-                                value="D",
-                                info="For dual group A/D soils"
-                            )
-
-                            replacement_bd = gr.Dropdown(
-                                label="Replace B/D with",
-                                choices=["A", "B", "C", "D"],
-                                value="D",
-                                info="For dual group B/D soils"
-                            )
-
-                            replacement_cd = gr.Dropdown(
-                                label="Replace C/D with",
-                                choices=["A", "B", "C", "D"],
-                                value="D",
-                                info="For dual group C/D soils"
-                            )
-
-                    with gr.Column(scale=1):
-                        gr.HTML('<div class="workflow-subhead">Watershed Analysis (Optional)</div>')
-                        gr.HTML("""
-                        <div class="workflow-hint">
-                            Add watershed or subbasin boundaries to get per-basin CN statistics. This layer is also required when running GCN10 without your own soil and land use data.
-                        </div>
-                        """)
-
-                        watershed_file = gr.File(
-                            label="Watershed Boundaries",
-                            elem_id="watershed_input"
-                        )
-
-                        watershed_field = gr.Dropdown(
-                            label="Watershed Name/ID Field",
-                            choices=[],
-                            value=None,
-                            allow_custom_value=True,
-                            info="Select the field that identifies each watershed. The list updates after upload."
-                        )
-
-                watershed_file.change(
-                    fn=lambda file: get_column_options(
-                        file,
-                        preferred_names={"name", "watershed", "watershed_id", "huc", "huc_id", "huc8", "id"},
-                        fallback_value=None,
-                    ),
-                    inputs=[watershed_file],
-                    outputs=[watershed_field]
-                )
-
             with gr.Tab("3. GCN10 Global Dataset (Optional)", id="gcn10") as tab_gcn10:
                 gr.HTML("""
                 <div class="workflow-hint">
-                    GCN10 is a global 10 m Curve Number dataset by Azzam and Cho (2026), built from ESA WorldCover 2021 land cover and HYSOGs250m soil groups. Enable it to view the GCN10 raster on the map, download it for your watershed, and compare it with your own results. The app streams only the data covering your area, so a typical run adds a few seconds. Needs an internet connection during processing.
+                    GCN10 is a global 10 m Curve Number dataset by Azzam and Cho (2026), built from ESA WorldCover 2021 land cover and HYSOGs250m soil groups. Enable it to view the GCN10 raster on the map, download it for your watershed, and compare it with your own results. It is clipped to the watershed boundary uploaded in tab 1 (or, if none is uploaded, to the CN polygons generated in tab 2). This workflow is independent of tab 2: enable either one or both. The app streams only the data covering your area, so a typical run adds a few seconds. Needs an internet connection during processing.
                 </div>
                 """)
 
                 use_gcn10 = gr.Checkbox(
                     label="Include GCN10 global Curve Number data",
-                    value=False,
-                    info="Off by default. Everything else in the app works without it."
+                    value=True,
+                    info="On by default. Turn it off if you are offline or do not need the global dataset."
                 )
 
-                with gr.Group(visible=False) as gcn10_options:
+                with gr.Group(visible=True) as gcn10_options:
                     with gr.Row():
                         gcn10_hc = gr.Dropdown(
                             label="Hydrologic Condition",
@@ -929,18 +1033,27 @@ def create_interface():
                 </div>
                 """)
 
+                with gr.Row(elem_classes=["next-row"]):
+                    next_btn_gcn10 = gr.Button("Next: Run & Results", variant="secondary")
+
                 use_gcn10.change(
                     fn=lambda enabled: gr.update(visible=enabled),
                     inputs=[use_gcn10],
                     outputs=[gcn10_options]
                 )
 
-            with gr.Tab("4. Results", id="results") as tab_results:
+            with gr.Tab("4. Run & Results", id="results") as tab_results:
                 gr.HTML("""
                 <div class="workflow-hint">
-                    Set up tabs 1 to 3, then click Calculate Curve Numbers below. The report, map, and download files appear here when processing finishes.
+                    Set up tabs 1 to 3, then click Calculate Curve Numbers below. The report, map, and download files appear here when processing finishes, and every output is also saved to a Results folder next to the app.
                 </div>
                 """)
+
+                calculate_btn = gr.Button(
+                    "Calculate Curve Numbers",
+                    variant="primary",
+                    size="lg",
+                )
 
                 # Processing status display
                 status_display = gr.HTML(visible=False, elem_classes="processing-status")
@@ -948,7 +1061,7 @@ def create_interface():
                 with gr.Row():
                     vector_output = gr.File(label="CN Polygons (GeoPackage)", visible=False)
                     raster_output = gr.File(label="CN Raster (GeoTIFF)", visible=False)
-                    watershed_excel_output = gr.File(label="Watershed Statistics (Excel)", visible=False)
+                    watershed_excel_output = gr.File(label="Watershed Statistics (CSV)", visible=False)
                     gcn10_raster_output = gr.File(label="GCN10 Raster (GeoTIFF)", visible=False)
                     gcn10_csv_output = gr.File(label="GCN10 Watershed Statistics (CSV)", visible=False)
 
@@ -995,24 +1108,18 @@ def create_interface():
                 - [SSURGO Soil Data Downloader](https://www.arcgis.com/apps/View/index.html?appid=cdc49bd63ea54dd2977f3f2853e07fff) - Soil data source
                 """)
 
-        with gr.Row(elem_classes=["calculate-row"]):
-            calculate_btn = gr.Button(
-                "Calculate Curve Numbers",
-                variant="primary",
-                size="lg",
-                interactive=False,
-            )
-
-        # The button only becomes active on the Results tab, so the setup
-        # tabs are completed first
-        for setup_tab in [tab_howto, tab_inputs, tab_params, tab_gcn10, tab_about]:
-            setup_tab.select(
-                fn=lambda: gr.update(interactive=False),
-                outputs=[calculate_btn],
-            )
-        tab_results.select(
-            fn=lambda: gr.update(interactive=True),
-            outputs=[calculate_btn],
+        # Next buttons walk the user through the setup tabs in order
+        next_btn_inputs.click(
+            fn=lambda: gr.Tabs(selected="usercn"),
+            outputs=[workflow_tabs],
+        )
+        next_btn_usercn.click(
+            fn=lambda: gr.Tabs(selected="gcn10"),
+            outputs=[workflow_tabs],
+        )
+        next_btn_gcn10.click(
+            fn=lambda: gr.Tabs(selected="results"),
+            outputs=[workflow_tabs],
         )
 
         def update_outputs(*args, progress=gr.Progress(track_tqdm=True)):

@@ -16,6 +16,9 @@ import tempfile
 import os
 import branca.colormap as cm
 import json
+import rasterio
+from rasterio.vrt import WarpedVRT
+from rasterio.enums import Resampling
 
 def get_file_as_base64(file_path):
     """Convert file to base64 for inline download."""
@@ -35,6 +38,99 @@ def create_csv_download_link(df, filename="watershed_statistics.csv"):
         return csv_b64, filename
     except:
         return None, None
+
+def read_cn_display_image(raster_path, max_dimension=2048, nodata=0):
+    """
+    Read the user CN raster as a decimated EPSG:4326 image for map display.
+
+    This only affects how the map overlay is drawn. The downloadable GeoTIFF
+    and all statistics keep the full native resolution and CRS.
+
+    Returns:
+    --------
+    tuple : (uint8 array, (south, west, north, east) bounds)
+    """
+    with rasterio.open(raster_path) as src:
+        needs_warp = src.crs is not None and src.crs.to_epsg() != 4326
+        vrt = None
+        try:
+            if needs_warp:
+                vrt = WarpedVRT(
+                    src,
+                    crs="EPSG:4326",
+                    resampling=Resampling.nearest,
+                    src_nodata=nodata,
+                    nodata=nodata,
+                )
+            dataset = vrt if vrt is not None else src
+            scale = max(dataset.width, dataset.height) / float(max_dimension)
+            if scale > 1:
+                out_shape = (
+                    max(1, int(dataset.height / scale)),
+                    max(1, int(dataset.width / scale)),
+                )
+            else:
+                out_shape = (dataset.height, dataset.width)
+            data = dataset.read(1, out_shape=out_shape)
+            bounds = dataset.bounds
+        finally:
+            if vrt is not None:
+                vrt.close()
+    return data, (bounds.bottom, bounds.left, bounds.top, bounds.right)
+
+
+def add_watershed_cn_labels(layer, watershed_gdf, watershed_field, stats_df,
+                            prefix, position="center"):
+    """
+    Add per-watershed mean CN text labels to a map layer.
+
+    The labels live inside the raster layer's FeatureGroup, so toggling the
+    layer on or off also toggles its labels. When two raster layers are shown
+    at once, "above"/"below" offsets keep both labels readable.
+    """
+    if watershed_gdf is None or watershed_field is None or stats_df is None:
+        return
+
+    offsets = {
+        "above": "translate(0, -120%)",
+        "below": "translate(0, 25%)",
+        "center": "none",
+    }
+    transform = offsets.get(position, "none")
+
+    for idx, row in watershed_gdf.iterrows():
+        try:
+            watershed_name = row[watershed_field]
+            centroid = row.geometry.centroid
+
+            mean_cn = "N/A"
+            if watershed_name in stats_df[watershed_field].values:
+                stats_row = stats_df[stats_df[watershed_field] == watershed_name]
+                if not stats_row.empty and 'mean' in stats_row.columns:
+                    mean_cn = f"{stats_row['mean'].iloc[0]:.1f}"
+
+            label_text = f"{prefix}={mean_cn}"
+
+            folium.Marker(
+                location=[centroid.y, centroid.x],
+                icon=folium.DivIcon(
+                    html=f'''<div class="watershed-label" style="
+                        font-size: 16px;
+                        font-weight: bold;
+                        color: white;
+                        text-shadow: 2px 2px 4px black;
+                        white-space: nowrap;
+                        transform: {transform};
+                    ">{label_text}</div>''',
+                    class_name='watershed-label-marker',
+                    icon_size=(0, 0),
+                    icon_anchor=(0, 0)
+                )
+            ).add_to(layer)
+        except Exception as e:
+            print(f"Warning: Could not add label for watershed {row.get(watershed_field, 'unknown')}: {e}")
+            continue
+
 
 def clean_gdf_for_folium(gdf, keep_columns=None):
     """Clean GeoDataFrame for Folium visualization by removing problematic columns."""
@@ -73,26 +169,31 @@ class CNVisualization:
                       watershed_field: Optional[str] = None,
                       watershed_stats: Optional[pd.DataFrame] = None,
                       gcn10_raster_path: Optional[str] = None,
-                      gcn10_label: Optional[str] = None) -> str:
+                      gcn10_label: Optional[str] = None,
+                      gcn10_watershed_stats: Optional[pd.DataFrame] = None) -> str:
         """
-        Create interactive map using folium with CN polygons, watersheds, and enhanced features.
+        Create an interactive folium map. Both CN sources are drawn as raster
+        image overlays, which keeps the map clean and fast to load.
 
         Parameters:
         -----------
         cn_gdf : GeoDataFrame, optional
-            GeoDataFrame with CN values (None when only GCN10 is processed)
+            GeoDataFrame with CN values, used for the shared color scale
+            (None when only GCN10 is processed)
         cn_raster_path : str, optional
-            Path to CN raster file (for bounds reference)
+            Path to the user CN raster shown as an image overlay
         watershed_gdf : GeoDataFrame, optional
             Watershed boundaries
         watershed_field : str, optional
             Field name for watershed identifiers
         watershed_stats : DataFrame, optional
-            Watershed statistics with mean CN values
+            Watershed statistics for the user CN raster (mean CN labels)
         gcn10_raster_path : str, optional
             Path to a clipped GCN10 raster (EPSG:4326) to show as an overlay
         gcn10_label : str, optional
             Layer name for the GCN10 overlay
+        gcn10_watershed_stats : DataFrame, optional
+            Watershed statistics for the GCN10 raster (GCN10 labels)
 
         Returns:
         --------
@@ -104,7 +205,16 @@ class CNVisualization:
         if watershed_gdf is not None and watershed_gdf.crs is not None and not watershed_gdf.crs.to_string().startswith('EPSG:4326'):
             watershed_gdf = watershed_gdf.to_crs('EPSG:4326')
 
-        # Read the GCN10 display image first so it can define map bounds too
+        # Read the user CN raster as a display image (reprojected to EPSG:4326)
+        cn_image = None
+        cn_bounds = None
+        if cn_raster_path is not None:
+            try:
+                cn_image, cn_bounds = read_cn_display_image(cn_raster_path)
+            except Exception as e:
+                print(f"Warning: Could not read the CN raster for map display: {e}")
+
+        # Read the GCN10 display image so it can define map bounds too
         gcn10_image = None
         gcn10_bounds = None
         if gcn10_raster_path is not None:
@@ -112,7 +222,10 @@ class CNVisualization:
             gcn10_image, gcn10_bounds = read_display_image(gcn10_raster_path)
 
         # Calculate map extent from whichever layers are available
-        if cn_gdf is not None:
+        if cn_bounds is not None:
+            south, west, north, east = cn_bounds
+            bounds = (west, south, east, north)
+        elif cn_gdf is not None:
             bounds = cn_gdf.total_bounds
         elif watershed_gdf is not None:
             bounds = watershed_gdf.total_bounds
@@ -177,49 +290,34 @@ class CNVisualization:
             caption='Curve Number Values'
         )
 
-        # Add CN polygons with color coding in a FeatureGroup for layer control
-        if cn_gdf is not None:
-            def style_function(feature):
-                cn_value = feature['properties']['CN']
-                return {
-                    'fillColor': colormap(cn_value),
-                    'color': 'black',
-                    'weight': 0.5,
-                    'fillOpacity': 0.8,
-                    'opacity': 1
-                }
+        # When both rasters are shown, offset their labels so they can be
+        # read at the same time (CN above the centroid, GCN10 below it)
+        both_label_sets = watershed_stats is not None and gcn10_watershed_stats is not None
 
-            def highlight_function(feature):
-                return {
-                    'fillOpacity': 1.0,
-                    'weight': 2,
-                    'color': 'white'
-                }
+        # Add the user CN raster as a toggleable image overlay
+        if cn_image is not None:
+            # Build an RGBA image from the shared colormap, NoData (0) transparent
+            lut = np.zeros((256, 4), dtype=np.uint8)
+            for cn in range(1, 101):
+                rgba = colormap.rgba_bytes_tuple(min(max(cn, min_cn), max_cn))
+                lut[cn] = (rgba[0], rgba[1], rgba[2], 255)
+            rgba_image = lut[cn_image]
 
-            # Create FeatureGroup for CN polygons with layer control
-            cn_layer = folium.FeatureGroup(name='CN Polygons (Your Data)', control=True, show=True)
-
-            # Clean the GeoDataFrame to remove non-JSON serializable columns
-            cn_gdf_clean = clean_gdf_for_folium(cn_gdf, ['geometry', 'CN'])
-
-            # Remove area_ha from tooltip as it's showing 0
-            folium.GeoJson(
-                cn_gdf_clean,
-                style_function=style_function,
-                highlight_function=highlight_function,
-                tooltip=folium.GeoJsonTooltip(
-                    fields=['CN'],
-                    aliases=['Curve Number:'],
-                    labels=True,
-                    sticky=True,
-                    style='background-color: white; color: #000000; font-family: arial; font-size: 12px; padding: 10px;'
-                ),
-                popup=folium.GeoJsonPopup(
-                    fields=['CN'],
-                    aliases=['CN:'],
-                    max_width=200
-                )
+            south, west, north, east = cn_bounds
+            cn_layer = folium.FeatureGroup(name='CN Raster (Your Data)', control=True, show=True)
+            folium.raster_layers.ImageOverlay(
+                image=rgba_image,
+                bounds=[[south, west], [north, east]],
+                opacity=0.8,
+                mercator_project=True,
+                origin='upper',
             ).add_to(cn_layer)
+
+            # Mean CN labels travel with this layer's on/off toggle
+            add_watershed_cn_labels(
+                cn_layer, watershed_gdf, watershed_field, watershed_stats,
+                prefix='CN', position='above' if both_label_sets else 'center'
+            )
 
             cn_layer.add_to(m)
 
@@ -237,7 +335,7 @@ class CNVisualization:
             gcn10_layer = folium.FeatureGroup(
                 name=gcn10_label or 'GCN10',
                 control=True,
-                show=(cn_gdf is None)
+                show=(cn_image is None)
             )
             folium.raster_layers.ImageOverlay(
                 image=rgba_image,
@@ -246,6 +344,13 @@ class CNVisualization:
                 mercator_project=True,
                 origin='upper',
             ).add_to(gcn10_layer)
+
+            # GCN10 mean labels travel with this layer's on/off toggle
+            add_watershed_cn_labels(
+                gcn10_layer, watershed_gdf, watershed_field, gcn10_watershed_stats,
+                prefix='GCN10', position='below' if both_label_sets else 'center'
+            )
+
             gcn10_layer.add_to(m)
         
         # Add watersheds as hollow polygons with labels if provided
@@ -278,46 +383,7 @@ class CNVisualization:
                     style='background-color: white; color: #000000; font-family: arial; font-size: 12px; padding: 10px;'
                 )
             ).add_to(watershed_layer)
-            
-            # Add watershed labels with mean CN values - text only, no background
-            if watershed_stats is not None:
-                for idx, row in watershed_gdf.iterrows():
-                    try:
-                        watershed_name = row[watershed_field]
-                        # Get centroid for label placement
-                        centroid = row.geometry.centroid
-                        
-                        # Find corresponding mean CN from watershed_stats
-                        mean_cn = "N/A"
-                        if watershed_name in watershed_stats[watershed_field].values:
-                            stats_row = watershed_stats[watershed_stats[watershed_field] == watershed_name]
-                            if not stats_row.empty and 'mean' in stats_row.columns:
-                                mean_cn = f"{stats_row['mean'].iloc[0]:.1f}"
-                        
-                        # Create label text in new format: CN={value}
-                        label_text = f"CN={mean_cn}"
-                        
-                        # Add label as a DivIcon marker with no background, just text
-                        folium.Marker(
-                            location=[centroid.y, centroid.x],
-                            icon=folium.DivIcon(
-                                html=f'''<div class="watershed-label" style="
-                                    font-size: 16px;
-                                    font-weight: bold;
-                                    color: white;
-                                    text-shadow: 2px 2px 4px black;
-                                    white-space: nowrap;
-                                ">{label_text}</div>''',
-                                class_name='watershed-label-marker',
-                                icon_size=(0, 0),
-                                icon_anchor=(0, 0)
-                            )
-                        ).add_to(watershed_layer)
-                        
-                    except Exception as e:
-                        print(f"Warning: Could not add label for watershed {row.get(watershed_field, 'unknown')}: {e}")
-                        continue
-            
+
             watershed_layer.add_to(m)
         
         # Add colormap legend to map
@@ -388,11 +454,14 @@ class CNVisualization:
             GCN10 layer: <a href="{GCN10_DATASET_URL}" target="_blank">{GCN10_ATTRIBUTION}</a>, ODbL v1.0
         </div>'''
 
-        # Wrap the map in a taller container (800px) with zoom script
+        # Wrap the map in a tall container, kept narrower than the page and
+        # centered so scrolling past it is easier
         wrapped_html = f'''
-        <div style="height: 800px; width: 100%; overflow: hidden; position: relative;">
-            {map_html}
-        </div>{gcn10_credit}
+        <div style="max-width: 1000px; margin: 0 auto;">
+            <div style="height: 800px; width: 100%; overflow: hidden; position: relative;">
+                {map_html}
+            </div>{gcn10_credit}
+        </div>
         <style>
             .folium-map {{
                 height: 800px !important;

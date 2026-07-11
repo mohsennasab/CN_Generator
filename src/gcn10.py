@@ -63,6 +63,32 @@ _REMOTE_READ_OPTIONS = {
 _APP_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
 TILE_INDEX_PATH = _APP_DIR / "data" / "gcn10" / "gcn10_tile_index.gpkg"
 
+# Substrings that identify TLS certificate failures. Corporate VPNs and
+# firewalls that inspect HTTPS traffic re-sign it with their own root
+# certificate, which the HTTP client used by GDAL may not trust.
+_CERT_ERROR_MARKERS = ("schannel", "ssl", "certificate", "cert_trust", "cert ")
+
+
+def _is_certificate_error(exc) -> bool:
+    """Check whether a rasterio/GDAL error looks like a TLS certificate failure."""
+    text = str(exc).lower()
+    return any(marker in text for marker in _CERT_ERROR_MARKERS)
+
+
+def _ca_bundle_options() -> dict:
+    """Use a custom CA bundle file when one is configured in the environment."""
+    for var in ("CN_CA_BUNDLE", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE"):
+        path = os.environ.get(var)
+        if path and Path(path).exists():
+            return {"GDAL_CURL_CA_BUNDLE": path}
+    return {}
+
+
+def _insecure_ssl_forced() -> bool:
+    """Check the CN_GCN10_INSECURE_SSL environment variable."""
+    value = os.environ.get("CN_GCN10_INSECURE_SSL", "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
 
 def variant_label(hydrologic_condition: str, arc: str, drainage: str) -> str:
     """Build a short human-readable label for a GCN10 variant."""
@@ -128,6 +154,7 @@ def fetch_gcn10_raster(
     drainage: str,
     output_path: str,
     progress_callback=None,
+    message_callback=None,
 ) -> dict:
     """
     Stream the GCN10 raster for the area of interest and save a clipped GeoTIFF.
@@ -136,6 +163,11 @@ def fetch_gcn10_raster(
     remote tile, so a typical watershed transfers a few megabytes instead of
     full tiles. The output keeps the native 10 m EPSG:4326 GCN10 grid with
     NoData 255 and is clipped to the area of interest boundary.
+
+    If the server certificate cannot be verified, which happens on corporate
+    VPNs and firewalls that inspect HTTPS traffic, the download is retried
+    once with certificate verification turned off. This only affects the
+    GCN10 read; it does not change any computed values.
 
     Parameters:
     -----------
@@ -151,6 +183,9 @@ def fetch_gcn10_raster(
         Path for the clipped output GeoTIFF.
     progress_callback : callable, optional
         Called as progress_callback(done_tiles, total_tiles).
+    message_callback : callable, optional
+        Called with plain-text status messages worth logging, such as the
+        certificate verification fallback warning.
 
     Returns:
     --------
@@ -176,13 +211,14 @@ def fetch_gcn10_raster(
     minx, miny, maxx, maxy = aoi_4326.total_bounds
     label = variant_label(hydrologic_condition, arc, drainage)
     total = len(block_fids)
-    mosaic = None
-    out_transform = None
-    aligned_bounds = None
-    out_height = out_width = None
 
-    try:
-        with rasterio.Env(**_REMOTE_READ_OPTIONS):
+    def _stream_tiles(extra_options):
+        """Read every tile window and mosaic it; returns the grid pieces."""
+        mosaic = None
+        out_transform = None
+        aligned_bounds = None
+        out_height = out_width = None
+        with rasterio.Env(**{**_REMOTE_READ_OPTIONS, **extra_options}):
             for done, block_fid in enumerate(block_fids):
                 url = f"/vsicurl/{tile_url(hydrologic_condition, arc, drainage, block_fid)}"
                 with rasterio.open(url) as src:
@@ -209,13 +245,68 @@ def fetch_gcn10_raster(
                 mosaic[fill] = data[fill]
                 if progress_callback is not None:
                     progress_callback(done + 1, total)
-    except RasterioIOError as exc:
-        raise RuntimeError(
-            "Could not read GCN10 data from the server "
-            f"({GCN10_BASE_URL}). Check your internet connection and try "
-            "again, or turn off the GCN10 option to run without it. "
-            f"Details: {exc}"
-        ) from exc
+        return mosaic, out_transform, out_height, out_width
+
+    def _say(message):
+        if message_callback is not None:
+            message_callback(message)
+        else:
+            print(message)
+
+    # First attempt verifies the server certificate normally. If the read
+    # fails, retry once with certificate verification turned off. Corporate
+    # VPNs and firewalls that inspect HTTPS traffic re-sign it with their own
+    # root certificate, which GDAL's HTTP client rejects; depending on the
+    # network, that failure can also surface as a generic "does not exist"
+    # error. If there is truly no internet connection, the retry fails the
+    # same way and the user still gets a clear message.
+    # CPL_VSIL_CURL_NON_CACHED makes the retry re-request the tiles instead
+    # of reusing GDAL's cached failure from the first attempt.
+    base_options = _ca_bundle_options()
+    insecure_options = {
+        **base_options,
+        "GDAL_HTTP_UNSAFESSL": "YES",
+        "CPL_VSIL_CURL_NON_CACHED": f"/vsicurl/{GCN10_BASE_URL}",
+    }
+    if _insecure_ssl_forced():
+        _say(
+            "CN_GCN10_INSECURE_SSL is set: reading GCN10 with certificate "
+            "verification turned off."
+        )
+        attempts = [insecure_options]
+    else:
+        attempts = [dict(base_options), insecure_options]
+
+    mosaic = out_transform = out_height = out_width = None
+    for attempt_index, options in enumerate(attempts):
+        try:
+            mosaic, out_transform, out_height, out_width = _stream_tiles(options)
+            break
+        except RasterioIOError as exc:
+            if attempt_index + 1 < len(attempts):
+                if _is_certificate_error(exc):
+                    _say(
+                        "The GCN10 server certificate could not be verified. "
+                        "This usually happens on corporate VPNs or networks "
+                        "that inspect secure traffic. Retrying the GCN10 "
+                        "download with certificate verification turned off. "
+                        "This only affects the GCN10 read; results are not "
+                        "changed."
+                    )
+                else:
+                    _say(
+                        "The first GCN10 read attempt failed "
+                        f"({exc}). Retrying once with relaxed certificate "
+                        "verification in case a VPN or firewall is "
+                        "interfering with the connection."
+                    )
+                continue
+            raise RuntimeError(
+                "Could not read GCN10 data from the server "
+                f"({GCN10_BASE_URL}). Check your internet connection and try "
+                "again, or turn off the GCN10 option to run without it. "
+                f"Details: {exc}"
+            ) from exc
 
     # Clip to the actual boundary, not just its bounding box
     outside = geometry_mask(

@@ -87,17 +87,17 @@ Install the developer/build dependencies:
 Build the package:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\build_windows_package.ps1 -Version 0.2
+powershell -ExecutionPolicy Bypass -File tools\build_windows_package.ps1 -Version 0.2.0
 ```
 
 The build creates:
 
 ```text
-release/CN_Generator_Windows_0.2/
-release/CN_Generator_Windows_0.2.zip
+release/CN_Generator_Windows_0.2.0/
+release/CN_Generator_Windows_0.2.0.zip
 ```
 
-Upload the zip file to a GitHub Release so non-developer users can download it.
+The script zips the package with .NET so that the hidden `_internal` folder is included, then verifies that the zip holds the same number of files as the package folder. Upload the zip file to a GitHub Release so non-developer users can download it.
 
 ## Features
 
@@ -106,14 +106,15 @@ Upload the zip file to a GitHub Release so non-developer users can download it.
 - Automatically handle CRS mismatch and dual hydrologic groups such as `A/D`, `B/D`, and `C/D`.
 - Optionally upload watershed boundaries to compute zonal statistics per basin.
 - Optionally view, download, and compare against the GCN10 global 10 m Curve Number dataset.
-- View an interactive map and HTML report.
+- View an interactive map and HTML report inside the app.
 - Export CN polygons as GeoPackage and CN raster as GeoTIFF.
+- Save every run's GIS outputs and statistics tables, plus a dated model run log, to a Results folder next to the app. The report and map are shown in the app and are not written to the Results folder.
 
 ## GCN10 Global Dataset (Optional)
 
 The app can read the GCN10 global 10 m Curve Number dataset for your watershed. GCN10 was built by Muhammad Abdullah Azzam and Huidae Cho at New Mexico State University from ESA WorldCover 2021 land cover and HYSOGs250m hydrologic soil groups.
 
-When you enable the GCN10 option in Step 2 you can:
+The GCN10 option lives in tab 3 of the app and is on by default. Turn it off there if you are offline or do not need the global dataset. With GCN10 enabled you can:
 
 - Pick the hydrologic condition (Poor, Fair, Good), antecedent runoff condition (ARC I, II, III), and drainage assumption (Drained, Undrained). The defaults are Fair, ARC II, Undrained.
 - See the GCN10 raster on the interactive map and turn it on or off with the layer control.
@@ -121,11 +122,12 @@ When you enable the GCN10 option in Step 2 you can:
 - Download GCN10 watershed statistics as a CSV file.
 - Compare your generated CN values with GCN10 side by side, per watershed, with a mean difference column.
 
-You can also run GCN10 alone without soil and land use data. Uncheck the box at the top of Step 1, upload a watershed boundary, and enable GCN10.
+You can also run GCN10 alone without soil and land use data. Uncheck the box at the top of tab 2, upload a watershed boundary in tab 1, and keep GCN10 enabled in tab 3.
 
 A few things worth knowing:
 
 - The GCN10 option needs an internet connection while processing. The app streams only the small window of data that covers your watershed, so a typical run transfers a few megabytes and takes a few seconds. Everything else in the app works offline.
+- On corporate VPNs or networks that inspect secure traffic, the normal certificate check on the GCN10 server can fail. When that happens, the app retries the GCN10 download once with certificate verification turned off and records this in the run log. This only affects how the GCN10 file is downloaded; the data and results are unchanged. If your organization provides a certificate bundle file, you can point the app at it by setting the `CN_CA_BUNDLE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, or `SSL_CERT_FILE` environment variable to its path.
 - The GCN10 raster keeps its native 10 m grid in EPSG:4326 with NoData 255. Statistics for each product are computed on its own grid over the same watershed polygons, so nothing is resampled for the comparison.
 - GCN10 data is distributed under the Open Data Commons Open Database License (ODbL) v1.0. Public use of the data or products derived from it must credit "GCN10 -- Global 10 m Curve Number Dataset (Azzam et al.)".
 

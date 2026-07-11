@@ -113,12 +113,34 @@ foreach ($helper in @("CN_Generator.ico")) {
     }
 }
 
-& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $projectRoot "tools\create_shortcut.ps1") `
-    -TargetPath (Join-Path $packageDir "CN_Generator.exe") `
-    -ShortcutPath (Join-Path $packageDir "CN_Generator.lnk") `
-    -IconPath (Join-Path $packageDir "CN_Generator.ico") | Out-Null
+# Note: no CN_Generator.lnk is shipped in the package. Windows shortcuts
+# store absolute paths from the build machine and break on other computers.
+# Users create working shortcuts locally with Create_Shortcuts.bat.
 
-Compress-Archive -LiteralPath $packageDir -DestinationPath $zipPath -Force
+# Zip with .NET so hidden files (the _internal folder) are included.
+# Compress-Archive skips hidden files, which produced broken release zips.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::CreateFromDirectory(
+    $packageDir,
+    $zipPath,
+    [System.IO.Compression.CompressionLevel]::Optimal,
+    $true
+)
+
+# Verify the zip holds every file from the package folder before shipping it
+$folderFiles = @(Get-ChildItem -LiteralPath $packageDir -Recurse -File -Force)
+$zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+try {
+    $zipFiles = @($zip.Entries | Where-Object { $_.Name -ne "" })
+    $zipCount = $zipFiles.Count
+}
+finally {
+    $zip.Dispose()
+}
+if ($zipCount -ne $folderFiles.Count) {
+    throw "Zip verification failed: package folder has $($folderFiles.Count) files but the zip has $zipCount. Do not ship this zip."
+}
+Write-Host "Zip verified: $zipCount files match the package folder."
 
 Write-Host "Created package folder: $packageDir"
 Write-Host "Created zip package:    $zipPath"

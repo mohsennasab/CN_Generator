@@ -32,6 +32,9 @@ Thumbs.db
 # Gradio local state
 .gradio/
 
+# Model run outputs
+Results/
+
 # Your project-specific folder
 CN_Wizard/
 
