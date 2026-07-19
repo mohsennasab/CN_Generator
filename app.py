@@ -99,6 +99,65 @@ def update_progress(progress, value, message, logger=None):
         progress(value, desc=message)
 
 
+def resolve_target_crs(crs_epsg, reference_gdf, logger=None):
+    """
+    Turn the CRS choice from the UI into an EPSG code.
+
+    "Automatic" (the default) picks a meter-based projected CRS from the data
+    extent, so cell size and area are exact with no degree-to-meter guess. A
+    specific EPSG code is honored as given, including EPSG:4326 for users who
+    want lon/lat output and accept the approximate cell size and area that come
+    with degrees.
+    """
+    def _log(message):
+        if logger is not None:
+            logger.log(message)
+        else:
+            print(message)
+
+    automatic = False
+    epsg = None
+    if isinstance(crs_epsg, str):
+        text = crs_epsg.strip().lower()
+        if text in ("", "auto", "automatic"):
+            automatic = True
+        else:
+            epsg = int(float(text))
+    elif crs_epsg is None:
+        automatic = True
+    else:
+        epsg = int(crs_epsg)
+        # 0 is used as a numeric stand-in for automatic.
+        if epsg == 0:
+            automatic = True
+
+    if automatic:
+        chosen = SpatialOperations.choose_projected_crs(reference_gdf)
+        if chosen is None:
+            # No CRS on the input, so it cannot be reprojected. Keep the old
+            # default and let the user know the units may be degrees.
+            chosen = 4326
+            _log(
+                "Automatic CRS could not read a coordinate system from the "
+                "input, so EPSG:4326 is used. Cell size and area are "
+                "approximate in degrees. Provide data with a defined CRS "
+                "(include the .prj file for shapefiles) for exact units."
+            )
+        elif chosen == 5070:
+            _log(
+                "Automatic CRS: using EPSG:5070 (NAD83 Conus Albers), an "
+                "equal-area meter projection, so cell size and area are exact."
+            )
+        else:
+            _log(
+                f"Automatic CRS: using EPSG:{chosen} (UTM zone), a meter "
+                "projection, so cell size and area are exact."
+            )
+        return chosen
+
+    return epsg
+
+
 def get_column_options(file, preferred_names=None, fallback_value=None):
     """Read layer fields and update a field selector dropdown."""
     if file is None:
@@ -271,13 +330,8 @@ def process_curve_numbers(
         excel_output = None
 
         if run_user_cn:
-            # Initialize calculator
-            calc = CurveNumberCalculator(
-                crs=f"EPSG:{crs_epsg}",
-                use_parallel=True
-            )
-
-            # Load data
+            # Load data first so the target coordinate system can be chosen
+            # from the actual extent when the user asks for automatic.
             update_progress(progress, 0.10, "Loading soil and land use layers", logger)
             try:
                 logger.log(f"Reading soil layer: {soil_file.name}")
@@ -294,6 +348,13 @@ def process_curve_numbers(
             except Exception as e:
                 logger.log(f"ERROR reading land use file: {str(e)}")
                 return build_result(status_message=f"Error reading land use file: {str(e)}")
+
+            # Resolve the target CRS, then initialize the calculator with it
+            target_epsg = resolve_target_crs(crs_epsg, soil_gdf, logger)
+            calc = CurveNumberCalculator(
+                crs=f"EPSG:{target_epsg}",
+                use_parallel=True
+            )
 
             # Load lookup table
             update_progress(progress, 0.18, "Loading curve number lookup table", logger)
@@ -920,16 +981,22 @@ def create_interface():
 
                     gr.HTML('<div class="workflow-subhead">4. Raster Settings</div>')
 
-                    crs_epsg = gr.Number(
-                        label="Coordinate System (EPSG Code)",
-                        value=4326,
-                        info="e.g., 4326 for WGS84, 3857 for Web Mercator"
+                    crs_epsg = gr.Dropdown(
+                        label="Coordinate System",
+                        choices=[
+                            ("Automatic, projected for exact area (recommended)", "auto"),
+                            ("EPSG:5070 NAD83 Conus Albers (US, equal area)", "5070"),
+                            ("EPSG:4326 WGS84 lon/lat (degrees, approximate area)", "4326"),
+                            ("EPSG:3857 Web Mercator", "3857"),
+                        ],
+                        value="auto",
+                        info="Automatic picks a meter-based projection from your data (Conus Albers in the US, otherwise the local UTM zone) so the cell size and area are exact. EPSG:4326 keeps lon/lat degrees, where the cell size and hectares are approximate."
                     )
 
                     cell_size = gr.Number(
                         label="Raster Cell Size (meters)",
                         value=30,
-                        info="Output raster resolution. The default of 30 meters matches the native resolution of NLCD land cover. For EPSG:4326 the value is converted to degrees automatically; for other coordinate systems it is used directly in their map units."
+                        info="Output raster resolution. The default of 30 meters matches the native resolution of NLCD land cover. With the Automatic or a projected coordinate system the value is used directly as meters. For EPSG:4326 it is converted to degrees automatically."
                     )
 
                     gr.HTML('<div class="workflow-subhead">5. Dual Hydrologic Group Replacements</div>')
@@ -1171,7 +1238,11 @@ def create_interface():
                 vector_output, raster_output, report_output, map_output,
                 watershed_excel_output, gcn10_raster_output, gcn10_csv_output,
                 status_display, workflow_tabs
-            ]
+            ],
+            # Show the progress indicator only on the status line. Without this,
+            # Gradio draws it over every output component, so the same progress
+            # message appears several times next to the download boxes.
+            show_progress_on=[status_display],
         )
     
     return demo

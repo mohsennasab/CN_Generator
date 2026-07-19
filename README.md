@@ -87,14 +87,14 @@ Install the developer/build dependencies:
 Build the package:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\build_windows_package.ps1 -Version 0.2.0
+powershell -ExecutionPolicy Bypass -File tools\build_windows_package.ps1 -Version 0.3.0
 ```
 
 The build creates:
 
 ```text
-release/CN_Generator_Windows_0.2.0/
-release/CN_Generator_Windows_0.2.0.zip
+release/CN_Generator_Windows_0.3.0/
+release/CN_Generator_Windows_0.3.0.zip
 ```
 
 The script zips the package with .NET so that the hidden `_internal` folder is included, then verifies that the zip holds the same number of files as the package folder. Upload the zip file to a GitHub Release so non-developer users can download it.

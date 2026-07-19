@@ -6,10 +6,15 @@ Calculate zonal statistics and CN distribution metrics
 import geopandas as gpd
 import pandas as pd
 import numpy as np
-from rasterstats import zonal_stats
 import rasterio
 from typing import Dict, List, Optional
 import warnings
+
+try:
+    from .zonal_coverage import coverage_weighted_zonal_stats
+except ImportError:  # when imported as a top-level module
+    from zonal_coverage import coverage_weighted_zonal_stats
+
 warnings.filterwarnings('ignore')
 
 class CNStatistics:
@@ -73,6 +78,14 @@ class CNStatistics:
         """
         Calculate zonal statistics for watersheds.
 
+        Statistics are area weighted by the fraction of each raster cell that
+        falls inside the watershed polygon. Cells fully inside count with a
+        weight of one, cells the boundary cuts count in proportion to the area
+        the watershed covers, and cells outside are ignored. This includes the
+        border cells that a cell-center rule would drop, without giving a
+        partly covered edge cell the same weight as a full interior cell. See
+        `zonal_coverage.py` for the coverage fraction method.
+
         Parameters:
         -----------
         cn_raster_path : str
@@ -89,7 +102,7 @@ class CNStatistics:
         --------
         DataFrame : Zonal statistics for each watershed
         """
-        print("Calculating zonal statistics for watersheds...")
+        print("Calculating area-weighted zonal statistics for watersheds...")
 
         # Open raster to check CRS
         with rasterio.open(cn_raster_path) as src:
@@ -100,16 +113,15 @@ class CNStatistics:
             print(f"Reprojecting watersheds to match raster CRS")
             watershed_gdf = watershed_gdf.to_crs(raster_crs)
 
-        # Calculate zonal statistics
-        stats_list = zonal_stats(
-            watershed_gdf.geometry,
+        # Area-weighted zonal statistics that include partial border cells
+        stats_list = coverage_weighted_zonal_stats(
             cn_raster_path,
-            stats=['min', 'max', 'mean', 'median', 'std'],
-            nodata=nodata
+            list(watershed_gdf.geometry),
+            nodata=nodata,
         )
-        
-        # Create results dataframe
-        results = pd.DataFrame(stats_list)
+
+        # Create results dataframe, keeping the columns the rest of the app uses
+        results = pd.DataFrame(stats_list)[['min', 'max', 'mean', 'median', 'std']]
         results[watershed_field] = watershed_gdf[watershed_field].values
         
         # Calculate additional statistics

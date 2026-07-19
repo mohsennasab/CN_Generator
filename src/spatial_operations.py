@@ -15,9 +15,59 @@ import os
 
 class SpatialOperations:
     """Handle spatial operations including rasterization and CRS transformations."""
-    
+
+    # Rough bounding box of the conterminous United States in lon/lat.
+    # Used only to decide whether Conus Albers is a sensible projection.
+    _CONUS_BBOX = (-125.0, 24.0, -66.5, 49.5)  # lon_min, lat_min, lon_max, lat_max
+
     @staticmethod
-    def create_cn_raster(cn_gdf: gpd.GeoDataFrame, 
+    def choose_projected_crs(gdf: gpd.GeoDataFrame) -> Optional[int]:
+        """
+        Pick a meter-based projected CRS that fits the data extent.
+
+        Working in a projected CRS with meter units means the raster cell size
+        is an exact distance and polygon areas are real hectares, with no
+        degree-to-meter approximation.
+
+        The rule is:
+        - If the data center falls inside the conterminous United States, use
+          EPSG:5070 (NAD83 / Conus Albers). It is an equal-area projection in
+          meters and is the projection NLCD and gSSURGO are distributed in, so
+          it also lines the grid up with those national datasets.
+        - Otherwise use the UTM zone that contains the data center (WGS84 UTM,
+          EPSG:326xx north of the equator, EPSG:327xx south). UTM is meter
+          based and keeps distortion small over a single watershed.
+
+        Parameters
+        ----------
+        gdf : GeoDataFrame
+            Data to fit a projection to. Must have a defined CRS.
+
+        Returns
+        -------
+        int or None
+            EPSG code of the chosen projected CRS, or None when the CRS is
+            missing so a caller can fall back to the data as read.
+        """
+        if gdf is None or gdf.crs is None:
+            return None
+
+        # Measure the extent in lon/lat so the test is CRS independent.
+        geographic = gdf if gdf.crs.to_epsg() == 4326 else gdf.to_crs(4326)
+        minx, miny, maxx, maxy = geographic.total_bounds
+        center_lon = (minx + maxx) / 2.0
+        center_lat = (miny + maxy) / 2.0
+
+        lon_min, lat_min, lon_max, lat_max = SpatialOperations._CONUS_BBOX
+        if lon_min <= center_lon <= lon_max and lat_min <= center_lat <= lat_max:
+            return 5070
+
+        zone = int((center_lon + 180.0) // 6.0) + 1
+        zone = min(max(zone, 1), 60)
+        return (32600 if center_lat >= 0 else 32700) + zone
+
+    @staticmethod
+    def create_cn_raster(cn_gdf: gpd.GeoDataFrame,
                          cell_size: float,
                          output_path: str = None,
                          bounds: Optional[Tuple] = None) -> str:
