@@ -150,15 +150,73 @@ class SpatialOperations:
             dtype=rasterio.uint8,
             crs=cn_gdf.crs,
             transform=transform,
+            nodata=0,
             compress='lzw'
         ) as dst:
             dst.write(raster, 1)
             dst.write_colormap(1, SpatialOperations._create_cn_colormap())
-            
+
         print(f"Created raster: {output_path}")
-        
+
         return output_path
-    
+
+    @staticmethod
+    def clip_raster_to_boundary(raster_path: str,
+                                boundary_gdf: gpd.GeoDataFrame,
+                                nodata: float = 0) -> str:
+        """
+        Clip a raster in place so it exactly matches the boundary polygons.
+
+        A cell keeps its value only when the cell center falls inside one of
+        the boundary polygons, the same rule a standard GIS raster clip
+        (Extract by Mask) uses. Every other cell is set to NoData. The grid,
+        resolution, and remaining cell values are unchanged.
+
+        Parameters:
+        -----------
+        raster_path : str
+            Path to the raster to clip. It is rewritten in place.
+        boundary_gdf : GeoDataFrame
+            Boundary polygons. Reprojected to the raster CRS when needed.
+        nodata : float
+            NoData value to write outside the boundary.
+
+        Returns:
+        --------
+        str : The raster path.
+        """
+        with rasterio.open(raster_path) as src:
+            data = src.read(1)
+            profile = src.profile
+            transform = src.transform
+            raster_crs = src.crs
+            try:
+                colormap = src.colormap(1)
+            except ValueError:
+                colormap = None
+
+        if boundary_gdf.crs is not None and raster_crs is not None \
+                and boundary_gdf.crs != raster_crs:
+            boundary_gdf = boundary_gdf.to_crs(raster_crs)
+
+        outside = features.geometry_mask(
+            boundary_gdf.geometry,
+            out_shape=data.shape,
+            transform=transform,
+            invert=False,
+            all_touched=False,
+        )
+        data[outside] = nodata
+
+        profile.update(nodata=nodata)
+        with rasterio.open(raster_path, 'w', **profile) as dst:
+            dst.write(data, 1)
+            if colormap is not None:
+                dst.write_colormap(1, colormap)
+
+        print(f"Clipped raster to boundary: {raster_path}")
+        return raster_path
+
     @staticmethod
     def _create_cn_colormap():
         """Create a colormap for CN values (30-100)."""

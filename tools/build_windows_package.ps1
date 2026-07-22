@@ -9,13 +9,13 @@ $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 $python = Join-Path $projectRoot ".venv\Scripts\python.exe"
 $icon = Join-Path $projectRoot "Logo\CN_Generator.ico"
 $releaseRoot = Join-Path $projectRoot "release"
-$packageName = "CN_Generator_Windows_$Version"
+$packageName = "Curve_Number_Studio_Windows_$Version"
 $packageDir = Join-Path $releaseRoot $packageName
 $zipPath = Join-Path $releaseRoot "$packageName.zip"
-$distDir = Join-Path $projectRoot "dist\CN_Generator"
+$distDir = Join-Path $projectRoot "dist\Curve_Number_Studio"
 
 if (-not (Test-Path -LiteralPath $python)) {
-    throw "Local venv was not found. Run CN_Generator.bat once first, then rerun this script."
+    throw "Local venv was not found. Run Curve_Number_Studio.bat once first, then rerun this script."
 }
 
 if (-not (Test-Path -LiteralPath $icon)) {
@@ -31,7 +31,7 @@ if (-not $SkipBuild) {
             --noconfirm `
             --clean `
             --onedir `
-            --name CN_Generator `
+            --name Curve_Number_Studio `
             --icon "$icon" `
             --add-data "Logo;Logo" `
             --add-data "data\gcn10;data\gcn10" `
@@ -56,8 +56,8 @@ if (-not $SkipBuild) {
     }
 }
 
-if (-not (Test-Path -LiteralPath (Join-Path $distDir "CN_Generator.exe"))) {
-    throw "Build output was not found at dist\CN_Generator\CN_Generator.exe."
+if (-not (Test-Path -LiteralPath (Join-Path $distDir "Curve_Number_Studio.exe"))) {
+    throw "Build output was not found at dist\Curve_Number_Studio\Curve_Number_Studio.exe."
 }
 
 if (Test-Path -LiteralPath $packageDir) {
@@ -82,8 +82,6 @@ if (Test-Path -LiteralPath $sampleSource) {
     }
 }
 
-Copy-Item -LiteralPath (Join-Path $projectRoot "Logo\CN_Generator.ico") -Destination (Join-Path $packageDir "CN_Generator.ico") -Force
-Copy-Item -LiteralPath (Join-Path $projectRoot "tools\package_create_shortcuts.bat") -Destination (Join-Path $packageDir "Create_Shortcuts.bat") -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot "tools\PACKAGE_README.txt") -Destination (Join-Path $packageDir "README.txt") -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot "LICENSE.md") -Destination (Join-Path $packageDir "LICENSE.txt") -Force
 
@@ -104,18 +102,6 @@ if (Test-Path -LiteralPath $internalDir) {
     $item = Get-Item -LiteralPath $internalDir -Force
     $item.Attributes = $item.Attributes -bor [System.IO.FileAttributes]::Hidden
 }
-
-foreach ($helper in @("CN_Generator.ico")) {
-    $helperPath = Join-Path $packageDir $helper
-    if (Test-Path -LiteralPath $helperPath) {
-        $item = Get-Item -LiteralPath $helperPath -Force
-        $item.Attributes = $item.Attributes -bor [System.IO.FileAttributes]::Hidden
-    }
-}
-
-# Note: no CN_Generator.lnk is shipped in the package. Windows shortcuts
-# store absolute paths from the build machine and break on other computers.
-# Users create working shortcuts locally with Create_Shortcuts.bat.
 
 # Zip with .NET so hidden files (the _internal folder) are included.
 # Compress-Archive skips hidden files, which produced broken release zips.

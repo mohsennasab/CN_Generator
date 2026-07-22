@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)]
     [string]$VenvDir,
 
@@ -17,7 +17,7 @@ Add-Type -AssemblyName Microsoft.VisualBasic
 
 function New-SetupForm {
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = "CN Generator Setup"
+    $form.Text = "Curve Number Studio Setup"
     $form.Size = New-Object System.Drawing.Size(680, 470)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
@@ -26,7 +26,7 @@ function New-SetupForm {
     $form.BackColor = [System.Drawing.Color]::FromArgb(247, 249, 247)
 
     $title = New-Object System.Windows.Forms.Label
-    $title.Text = "Preparing CN Generator"
+    $title.Text = "Preparing Curve Number Studio"
     $title.Font = New-Object System.Drawing.Font("Segoe UI", 15, [System.Drawing.FontStyle]::Bold)
     $title.ForeColor = [System.Drawing.Color]::FromArgb(31, 48, 47)
     $title.Location = New-Object System.Drawing.Point(24, 22)
@@ -225,7 +225,7 @@ try {
             return $pipCode
         }
 
-        return Invoke-LoggedCommand -FilePath $venvPython -Arguments @("-m", "pip", "install", "-r", $requirements) -StepName "Installing CN Generator dependencies..."
+        return Invoke-LoggedCommand -FilePath $venvPython -Arguments @("-m", "pip", "install", "-r", $requirements) -StepName "Installing Curve Number Studio dependencies..."
     }
 
     $installCode = & $install
@@ -250,7 +250,7 @@ try {
 
     $script:Ui.Progress.Style = "Continuous"
     $script:Ui.Progress.Value = 100
-    Update-SetupStatus "Setup complete. Launching CN Generator..."
+    Update-SetupStatus "Setup complete. Launching Curve Number Studio..."
     Start-Sleep -Milliseconds 900
     $script:Ui.Form.Close()
     exit 0
@@ -260,7 +260,7 @@ catch {
     $script:Ui.Progress.Value = 0
     Update-SetupStatus "Setup could not complete."
     Add-SetupLog $_.Exception.Message
-    [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, "CN Generator Setup", "OK", "Error") | Out-Null
+    [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, "Curve Number Studio Setup", "OK", "Error") | Out-Null
     $script:Ui.Close.Enabled = $true
     while ($script:Ui.Form.Visible) {
         [System.Windows.Forms.Application]::DoEvents()
@@ -268,3 +268,4 @@ catch {
     }
     exit 1
 }
+

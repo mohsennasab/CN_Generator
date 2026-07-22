@@ -11,9 +11,9 @@ from typing import Dict, List, Optional
 import warnings
 
 try:
-    from .zonal_coverage import coverage_weighted_zonal_stats
+    from .zonal_exact import exact_zonal_stats
 except ImportError:  # when imported as a top-level module
-    from zonal_coverage import coverage_weighted_zonal_stats
+    from zonal_exact import exact_zonal_stats
 
 warnings.filterwarnings('ignore')
 
@@ -78,13 +78,11 @@ class CNStatistics:
         """
         Calculate zonal statistics for watersheds.
 
-        Statistics are area weighted by the fraction of each raster cell that
-        falls inside the watershed polygon. Cells fully inside count with a
-        weight of one, cells the boundary cuts count in proportion to the area
-        the watershed covers, and cells outside are ignored. This includes the
-        border cells that a cell-center rule would drop, without giving a
-        partly covered edge cell the same weight as a full interior cell. See
-        `zonal_coverage.py` for the coverage fraction method.
+        A raster cell is assigned to a watershed when the cell center falls
+        inside the watershed polygon, the same rule an exact raster clip
+        uses. The statistics for each watershed therefore come from exactly
+        the cells that a clip of the raster to that watershed would keep,
+        each counted once with equal weight. See `zonal_exact.py`.
 
         Parameters:
         -----------
@@ -102,7 +100,7 @@ class CNStatistics:
         --------
         DataFrame : Zonal statistics for each watershed
         """
-        print("Calculating area-weighted zonal statistics for watersheds...")
+        print("Calculating exact-clip zonal statistics for watersheds...")
 
         # Open raster to check CRS
         with rasterio.open(cn_raster_path) as src:
@@ -113,8 +111,9 @@ class CNStatistics:
             print(f"Reprojecting watersheds to match raster CRS")
             watershed_gdf = watershed_gdf.to_crs(raster_crs)
 
-        # Area-weighted zonal statistics that include partial border cells
-        stats_list = coverage_weighted_zonal_stats(
+        # Exact-clip zonal statistics: only cells whose center falls inside
+        # each watershed polygon are counted
+        stats_list = exact_zonal_stats(
             cn_raster_path,
             list(watershed_gdf.geometry),
             nodata=nodata,

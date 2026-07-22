@@ -1,8 +1,8 @@
-# CN Generator License
+# Curve Number Studio License
 
 Copyright (c) Mohsen Tahmasebi Nasab.
 
-CN Generator is free for personal, non-commercial use.
+Curve Number Studio is free for personal, non-commercial use.
 
 Commercial use is not included in this personal-use permission. Commercial use includes, but is not limited to, paid consulting, internal business use, client deliverables, paid training, workshops, course material, demonstrations for paid services, and videos or media created for commercial purposes.
 

@@ -673,10 +673,9 @@ class CNVisualization:
                     html += f'<div class="stat-box"><strong>{display_key}</strong><br>{gcn10_stats[key]:.2f}</div>'
             html += "</div>"
             html += ('<div class="footnote">GCN10 values are read from the global 10 m dataset on its '
-                     'native EPSG:4326 grid, clipped to your boundary. The clip keeps every cell the '
-                     'boundary touches, and the statistics are area weighted by the fraction of each cell '
-                     'inside the boundary, so partial border cells are included in proportion to their '
-                     'overlap.</div>')
+                     'native EPSG:4326 grid and clipped exactly to your boundary: a cell is kept only '
+                     'when its center falls inside the boundary. The statistics are computed from '
+                     'exactly the cells in the clipped raster.</div>')
         
         # Watershed Statistics (if provided)
         if watershed_stats is not None and not watershed_stats.empty:
@@ -726,9 +725,9 @@ class CNVisualization:
             html += watershed_html
             
             html += '<p><em>The table above shows the first 5 rows. Use the download button to get all watershed statistics.</em></p>'
-            html += ('<div class="footnote">Watershed statistics are area weighted by the fraction of each '
-                     'CN raster cell inside the watershed, so cells along the border are included in '
-                     'proportion to their overlap.</div>')
+            html += ('<div class="footnote">Watershed statistics come from exactly the raster cells '
+                     'clipped to each watershed: a cell counts when its center falls inside the '
+                     'watershed boundary, matching a standard GIS raster clip.</div>')
 
         # GCN10 watershed statistics
         if gcn10_watershed_stats is not None and not gcn10_watershed_stats.empty:

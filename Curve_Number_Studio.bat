@@ -1,18 +1,15 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
-title CN Generator
+title Curve Number Studio
 cd /d "%~dp0"
 
-set "APP_NAME=CN Generator"
+set "APP_NAME=Curve Number Studio"
 set "VENV_DIR=%~dp0.venv"
 set "VENV_PYTHON=%VENV_DIR%\Scripts\python.exe"
 set "REQ_FILE=%~dp0requirements.txt"
 set "REQ_HASH_FILE=%VENV_DIR%\.requirements.sha256"
-set "SHORTCUT_PATH=%~dp0CN_Generator.lnk"
-set "SHORTCUT_SCRIPT=%~dp0tools\create_shortcut.ps1"
 set "INSTALL_SCRIPT=%~dp0tools\install_dependencies.ps1"
-set "ICON_PATH=%~dp0Logo\CN_Generator.ico"
 
 set "CN_SERVER_NAME=127.0.0.1"
 set "CN_OPEN_BROWSER=1"
@@ -20,10 +17,6 @@ set "CN_SHARE=0"
 set "GRADIO_ANALYTICS_ENABLED=False"
 set "NO_PROXY=127.0.0.1,localhost,%NO_PROXY%"
 set "no_proxy=127.0.0.1,localhost,%no_proxy%"
-
-if exist "%SHORTCUT_SCRIPT%" if exist "%ICON_PATH%" if not exist "%SHORTCUT_PATH%" (
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%SHORTCUT_SCRIPT%" -TargetPath "%~f0" -ShortcutPath "%SHORTCUT_PATH%" -IconPath "%ICON_PATH%" >nul 2>nul
-)
 
 echo.
 echo =========================================

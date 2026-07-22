@@ -1,5 +1,5 @@
 """
-SCS Curve Number Generator - Gradio Interface
+Curve Number Studio - Gradio Interface
 Web application for calculating SCS Curve Numbers with open-source tools
 """
 
@@ -20,6 +20,11 @@ import json
 import zipfile
 import time
 from datetime import datetime
+
+# App identity. The GUI header must always show the app name with the
+# current version next to it. Bump APP_VERSION with every release.
+APP_NAME = "Curve Number Studio"
+APP_VERSION = "0.4.0"
 
 # Default configuration
 DEFAULT_CRS = "EPSG:4326"
@@ -269,7 +274,7 @@ def process_curve_numbers(
             f"Could not create the results folder at {run_dir}: {e}"))
 
     logger = RunLogger(run_dir / f"model_run_log_{run_stamp}.txt")
-    logger.log("CN Generator model run started")
+    logger.log(f"{APP_NAME} model run started")
     logger.log(f"Results folder: {run_dir}")
 
     try:
@@ -406,6 +411,13 @@ def process_curve_numbers(
                 dissolved_gdf, cell_size, raster_path
             )
             logger.log(f"CN raster saved: {raster_path}")
+
+            # Clip the CN raster exactly to the boundary layer when one was
+            # uploaded, so no cell outside the subbasins keeps a value.
+            if watershed_gdf is not None and len(watershed_gdf) > 0:
+                update_progress(progress, 0.61, "Clipping CN raster to the boundary layer", logger)
+                SpatialOperations.clip_raster_to_boundary(raster_path, watershed_gdf)
+                logger.log("CN raster clipped to the watershed boundary")
 
             # Calculate statistics
             update_progress(progress, 0.64, "Calculating summary statistics", logger)
@@ -596,6 +608,12 @@ def create_interface():
         line-height: 1.15;
         color: var(--body-text-color);
         letter-spacing: 0;
+    }
+
+    .app-title .app-version {
+        font-size: 16px;
+        font-weight: 500;
+        color: var(--body-text-color-subdued, var(--body-text-color));
     }
 
     .app-title p {
@@ -805,7 +823,7 @@ def create_interface():
     """
     
     with gr.Blocks(
-        title="SCS Curve Number Generator",
+        title=f"{APP_NAME} v{APP_VERSION}",
         theme=gr.themes.Soft(
             primary_hue="teal",
             neutral_hue="gray",
@@ -815,7 +833,7 @@ def create_interface():
     ) as demo:
         logo_data_uri = get_logo_data_uri()
         logo_html = (
-            f'<img class="app-logo" src="{logo_data_uri}" alt="CN Generator logo">'
+            f'<img class="app-logo" src="{logo_data_uri}" alt="{APP_NAME} logo">'
             if logo_data_uri
             else ""
         )
@@ -824,7 +842,7 @@ def create_interface():
             <div class="app-header">
                 {logo_html}
                 <div class="app-title">
-                    <h1>SCS Curve Number Generator</h1>
+                    <h1>{APP_NAME} <span class="app-version">v{APP_VERSION}</span></h1>
                     <p>Calculate <strong>SCS Curve Numbers</strong> for watershed runoff estimation using open-source geospatial tools.</p>
                     <div class="developer-top">
                         <strong>Mohsen Tahmasebi Nasab, PhD</strong> | Water Resources Engineer |
@@ -1265,7 +1283,7 @@ if __name__ == "__main__":
     open_browser = env_flag("CN_OPEN_BROWSER", default=True)
     favicon_path = str(ICON_PATH if ICON_PATH.exists() else LOGO_PATH) if LOGO_PATH.exists() else None
 
-    print(f"Starting CN Generator locally at http://{server_name}:{server_port}")
+    print(f"Starting {APP_NAME} v{APP_VERSION} locally at http://{server_name}:{server_port}")
     demo.launch(
         server_name=server_name,
         server_port=server_port,

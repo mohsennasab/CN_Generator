@@ -28,9 +28,9 @@ from rasterio.windows import from_bounds, bounds as window_bounds
 from rasterio.errors import RasterioIOError
 
 try:
-    from .zonal_coverage import cell_coverage_fractions, weighted_stats_from_arrays
+    from .zonal_exact import stats_from_values
 except ImportError:  # when imported as a top-level module
-    from zonal_coverage import cell_coverage_fractions, weighted_stats_from_arrays
+    from zonal_exact import stats_from_values
 
 GCN10_BASE_URL = "https://hydro.nmsu.edu/datasets/gcn10"
 GCN10_NODATA = 255
@@ -313,17 +313,16 @@ def fetch_gcn10_raster(
                 f"Details: {exc}"
             ) from exc
 
-    # Clip to the actual boundary, not just its bounding box. all_touched
-    # keeps every cell the boundary passes through, so the border ring of
-    # cells stays in the output raster instead of being trimmed off. Cells
-    # whose center is outside the boundary would be dropped by the default
-    # rule, which is exactly the edge case we want to keep.
+    # Clip exactly to the actual boundary, not just its bounding box. A cell
+    # is kept only when its center falls inside the boundary polygon, the
+    # same rule a standard GIS raster clip (Extract by Mask) uses, so no
+    # cell outside the boundary stays in the output raster.
     outside = geometry_mask(
         aoi_4326.geometry,
         out_shape=(out_height, out_width),
         transform=out_transform,
         invert=False,
-        all_touched=True,
+        all_touched=False,
     )
     mosaic[outside] = GCN10_NODATA
 
@@ -351,16 +350,10 @@ def fetch_gcn10_raster(
         dst.write(mosaic, 1)
         dst.write_colormap(1, _create_gcn10_colormap())
 
-    # Overall statistics for the whole area of interest, area weighted by the
-    # fraction of each cell inside the boundary. This matches the per-watershed
-    # zonal statistics and gives partial border cells their true weight instead
-    # of counting them as full cells.
-    aoi_union = aoi_4326.geometry.unary_union
-    coverage = cell_coverage_fractions(
-        aoi_union, out_transform, out_height, out_width
-    )
-    stats = weighted_stats_from_arrays(mosaic, coverage, GCN10_NODATA)
-    stats["count"] = int(valid.size)
+    # Overall statistics for the whole area of interest, computed from exactly
+    # the cells that survived the clip. This matches the per-watershed zonal
+    # statistics, which use the same cell-center rule.
+    stats = stats_from_values(valid)
 
     return {
         "path": output_path,
