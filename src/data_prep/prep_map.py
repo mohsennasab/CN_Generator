@@ -38,20 +38,25 @@ def _add_raster_overlay(map_obj, raster_path, lut, name, show, nodata):
 
 
 def _legend_html(title, entries):
-    """A small floating legend box; entries are (color, label) pairs."""
+    """
+    A legend panel shown beside the map, styled with the app theme variables
+    so it works in both light and dark mode. Entries are (color, label) pairs.
+    """
     rows = "".join(
-        f'<div style="margin: 2px 0; white-space: nowrap;">'
-        f'<span style="display: inline-block; width: 14px; height: 14px; '
-        f'background: {color}; border: 1px solid #00000033; '
-        f'vertical-align: middle; margin-right: 6px;"></span>'
-        f'<span style="vertical-align: middle;">{label}</span></div>'
+        f'<div style="margin: 3px 0; display: flex; align-items: center; gap: 7px;">'
+        f'<span style="display: inline-block; flex: 0 0 auto; width: 14px; '
+        f'height: 14px; background: {color}; border: 1px solid #00000033; '
+        f'border-radius: 3px;"></span>'
+        f'<span style="line-height: 1.25;">{label}</span></div>'
         for color, label in entries
     )
     return (
-        f'<div style="background: #ffffff; color: #222222; padding: 8px 10px; '
-        f'border: 1px solid #999999; border-radius: 6px; font-size: 12px; '
-        f'font-family: Arial, sans-serif; margin-bottom: 8px;">'
-        f'<div style="font-weight: bold; margin-bottom: 4px;">{title}</div>'
+        f'<div style="background: var(--block-background-fill, #ffffff); '
+        f'color: var(--body-text-color, #222222); padding: 10px 12px; '
+        f'border: 1px solid var(--border-color-primary, #999999); '
+        f'border-radius: 8px; font-size: 12px; '
+        f'font-family: Arial, sans-serif;">'
+        f'<div style="font-weight: bold; margin-bottom: 6px; font-size: 13px;">{title}</div>'
         f"{rows}</div>"
     )
 
@@ -105,7 +110,8 @@ def create_prep_map(
     ).add_to(m)
     m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
 
-    legends = []
+    nlcd_legend = None
+    soil_legend = None
 
     # NLCD land cover overlay with the official colors
     if nlcd_raster_path is not None:
@@ -128,7 +134,7 @@ def create_prep_map(
                 (color, f"{code} {NLCD_CLASSES[code]}")
                 for code, color in NLCD_COLORS.items()
             ]
-        legends.append(_legend_html(layer_name, entries))
+        nlcd_legend = _legend_html(layer_name, entries)
 
     # Soil hydrologic group overlay
     if soil_raster_path is not None:
@@ -147,7 +153,7 @@ def create_prep_map(
         else:
             groups_present = list(HSG_COLORS)
         entries = [(HSG_COLORS[g], f"Group {g}") for g in groups_present]
-        legends.append(_legend_html("Soil Hydrologic Groups", entries))
+        soil_legend = _legend_html("Soil Hydrologic Groups", entries)
 
     # Watershed boundary on top, toggleable
     boundary_layer = folium.FeatureGroup(name="Watersheds", control=True, show=True)
@@ -179,20 +185,33 @@ def create_prep_map(
     folium.LayerControl(position="topright", collapsed=False).add_to(m)
 
     map_html = m._repr_html_()
-    legend_column = "".join(legends)
-    legend_block = (
-        f'<div style="position: absolute; bottom: 20px; left: 10px; '
-        f'z-index: 1000; max-height: 60%; overflow-y: auto;">{legend_column}</div>'
-        if legend_column
-        else ""
+
+    # Legends sit beside the map, land use on the left and soils on the
+    # right, so they never cover the map itself. On narrow screens the
+    # columns wrap above and below the map instead of squeezing it.
+    left_column = (
+        f'<div style="flex: 0 1 220px; min-width: 170px;">{nlcd_legend}</div>'
+        if nlcd_legend else ""
+    )
+    right_column = (
+        f'<div style="flex: 0 1 180px; min-width: 140px;">{soil_legend}</div>'
+        if soil_legend else ""
     )
 
     return f'''
-    <div style="max-width: 1000px; margin: 0 auto;">
-        <div style="height: 800px; width: 100%; overflow: hidden; position: relative;">
-            {map_html}{legend_block}
+    <div style="max-width: 1420px; margin: 0 auto;">
+        <div style="display: flex; flex-wrap: wrap; gap: 14px;
+                    justify-content: center; align-items: flex-start;">
+            {left_column}
+            <div style="flex: 1 1 640px; max-width: 1000px; min-width: 0;">
+                <div style="height: 800px; width: 100%; overflow: hidden; position: relative;">
+                    {map_html}
+                </div>
+            </div>
+            {right_column}
         </div>
-        <div style="font-size: 12px; padding: 4px 2px; color: var(--body-text-color-subdued, #666);">
+        <div style="font-size: 12px; padding: 6px 2px 4px 2px; text-align: center;
+                    color: var(--body-text-color-subdued, #666);">
             Land cover: National Land Cover Database, USGS / MRLC Consortium.
             Soils: SSURGO Database, USDA-NRCS Soil Data Access.
         </div>
