@@ -1,15 +1,24 @@
 """
-Data Preparation - NLCD Land Cover (MRLC Web Coverage Service)
+Data Preparation - NLCD Land Cover (official MRLC and USGS services)
 Download National Land Cover Database land cover for a watershed, ready to
 import into the CN workflow.
 
-Data source: the official MRLC GeoServer Web Coverage Service
-(https://www.mrlc.gov/geoserver/wcs), anonymous and free. NLCD land cover is
-served on its native 30 m EPSG:5070 (Conus Albers) grid with the official
-class color table embedded, for the conterminous United States (L48
-products). Available years are discovered live from the service capabilities
-so newly published epochs appear automatically, with a built-in fallback
-list used when the service cannot be reached.
+Two official, anonymous, free services are used, both on the native 30 m
+EPSG:5070 (Conus Albers) NLCD grid for the conterminous United States:
+
+- Epoch NLCD releases (2001-2021): the MRLC GeoServer Web Coverage Service
+  at https://www.mrlc.gov/geoserver/wcs, one coverage per release year.
+- Annual NLCD Collection 1 (1985 onward, including the most recent years):
+  the USGS EROS time-enabled Web Coverage Service behind the official MRLC
+  viewer at https://dmsdata.cr.usgs.gov/geoserver/, one coverage with a
+  yearly time axis selected through the WCS 1.0.0 TIME parameter.
+
+Years 2001-2021 use the epoch releases; every other year comes from Annual
+NLCD, and the year dropdown labels which product a year comes from. When
+the primary service for a year cannot be reached and the other service also
+offers that year, the download falls back to it with a log message.
+Available years are discovered live from both services so newly published
+years appear automatically, with built-in fallback lists used offline.
 
 Large watersheds are downloaded as a grid of small tiles instead of one
 giant request, so each transfer stays a few megabytes, progress is visible,
@@ -51,12 +60,27 @@ NLCD_NODATA = 0
 # requests to that grid keeps downloaded cells identical to the source cells.
 NLCD_GRID_ANCHOR = (15.0, 15.0)
 
+# Annual NLCD Collection 1 time-enabled coverage (USGS EROS GeoServer).
+# WCS 2.0.1 GetCoverage is broken on this mosaic server-side, so tiles are
+# requested through WCS 1.0.0 with the TIME parameter, which works.
+ANNUAL_WCS_URL = (
+    "https://dmsdata.cr.usgs.gov/geoserver/"
+    "mrlc_Land-Cover-Native_conus_year_data/wcs"
+)
+ANNUAL_COVERAGE = (
+    "mrlc_Land-Cover-Native_conus_year_data:Land-Cover-Native_conus_year_data"
+)
+# Annual NLCD uses 250 as its background value; it is remapped to the
+# app-wide NLCD NoData (0) as tiles arrive so both products behave the same.
+ANNUAL_SOURCE_NODATA = 250
+
 # Tiles of at most this many cells per side are requested from the WCS
 TILE_CELLS = 2048
 MAX_WORKERS = 4
 
-# Years always offered when the live capabilities check is unavailable
+# Years always offered when the live capabilities checks are unavailable
 FALLBACK_YEARS = [2021, 2019, 2016, 2013, 2011, 2008, 2006, 2004, 2001]
+ANNUAL_FALLBACK_YEARS = list(range(2025, 1984, -1))
 
 # Official NLCD legend: class code -> name (CONUS classes)
 NLCD_CLASSES = {
@@ -98,12 +122,20 @@ NLCD_COLORS = {
     95: "#6c9fb8",
 }
 
-_years_cache = None
+_epoch_years_cache = None
+_annual_years_cache = None
 
 
 def coverage_id(year):
     """WCS coverage ID for one NLCD land cover epoch (conterminous US)."""
     return f"mrlc_download__NLCD_{year}_Land_Cover_L48"
+
+
+def product_label(year, source):
+    """Human-readable product name for one year, shown in the UI and logs."""
+    if source == "annual":
+        return f"Annual NLCD {year}"
+    return f"NLCD {year} release"
 
 
 def official_colormap():
@@ -115,17 +147,11 @@ def official_colormap():
     return colormap
 
 
-def available_nlcd_years(message_callback=None, refresh=False):
-    """
-    List NLCD land cover years offered by the MRLC service, newest first.
-
-    The live service capabilities are checked once per app session so newly
-    published epochs show up automatically. When the check fails (offline,
-    firewall), the built-in fallback list of known years is returned.
-    """
-    global _years_cache
-    if _years_cache is not None and not refresh:
-        return _years_cache
+def _epoch_years(message_callback=None, refresh=False):
+    """Epoch NLCD years offered by the MRLC WCS, cached per session."""
+    global _epoch_years_cache
+    if _epoch_years_cache is not None and not refresh:
+        return _epoch_years_cache
     try:
         response = request_with_ssl_fallback(
             "GET",
@@ -145,48 +171,131 @@ def available_nlcd_years(message_callback=None, refresh=False):
                 r"mrlc_download__NLCD_(\d{4})_Land_Cover_L48", response.text
             )
         }
-        # Also recognize Annual NLCD coverages if MRLC publishes them later
-        years.update(
-            int(match)
-            for match in re.findall(
-                r"mrlc_download__Annual_NLCD_LndCov_(\d{4})_CU", response.text
-            )
-        )
         if years:
-            _years_cache = sorted(years, reverse=True)
-            return _years_cache
+            _epoch_years_cache = sorted(years, reverse=True)
+            return _epoch_years_cache
     except Exception as exc:  # capabilities check is best effort only
         say(
-            "NLCD: could not read the live year list from MRLC "
+            "NLCD: could not read the live epoch year list from MRLC "
             f"({exc}); using the built-in list.",
             message_callback,
         )
     return list(FALLBACK_YEARS)
 
 
-def _fetch_tile(year, bounds, message_callback=None):
+def _annual_years(message_callback=None, refresh=False):
+    """Annual NLCD years offered by the USGS time mosaic, cached per session."""
+    global _annual_years_cache
+    if _annual_years_cache is not None and not refresh:
+        return _annual_years_cache
+    try:
+        response = request_with_ssl_fallback(
+            "GET",
+            ANNUAL_WCS_URL,
+            message_callback=message_callback,
+            params={
+                "service": "WCS",
+                "version": "2.0.1",
+                "request": "DescribeCoverage",
+                "coverageId": ANNUAL_COVERAGE.replace(":", "__"),
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+        years = {
+            int(match)
+            for match in re.findall(
+                r"<gml:timePosition>(\d{4})", response.text
+            )
+        }
+        if years:
+            _annual_years_cache = sorted(years, reverse=True)
+            return _annual_years_cache
+    except Exception as exc:  # capabilities check is best effort only
+        say(
+            "NLCD: could not read the live Annual NLCD year list from USGS "
+            f"({exc}); using the built-in list.",
+            message_callback,
+        )
+    return list(ANNUAL_FALLBACK_YEARS)
+
+
+def available_nlcd_years(message_callback=None, refresh=False):
+    """
+    List all NLCD land cover years, newest first, as (year, source) pairs.
+
+    Years available as an epoch NLCD release (2001-2021) use the ``epoch``
+    source; every other year comes from Annual NLCD (``annual``). The live
+    services are checked once per app session so newly published years show
+    up automatically; built-in lists cover the offline case.
+    """
+    epoch = set(_epoch_years(message_callback, refresh))
+    annual = set(_annual_years(message_callback, refresh))
+    return [
+        (year, "epoch" if year in epoch else "annual")
+        for year in sorted(epoch | annual, reverse=True)
+    ]
+
+
+def year_choices(message_callback=None, refresh=False):
+    """Dropdown entries as (label, value) pairs, newest year first."""
+    return [
+        (product_label(year, source), str(year))
+        for year, source in available_nlcd_years(message_callback, refresh)
+    ]
+
+
+def fallback_year_choices():
+    """Dropdown entries from the built-in year lists, no network needed."""
+    epoch = set(FALLBACK_YEARS)
+    years = sorted(epoch | set(ANNUAL_FALLBACK_YEARS), reverse=True)
+    return [
+        (product_label(year, "epoch" if year in epoch else "annual"), str(year))
+        for year in years
+    ]
+
+
+def _fetch_tile(year, bounds, source, message_callback=None):
     """Download one WCS tile and return (array, transform)."""
     minx, miny, maxx, maxy = bounds
-    params = {
-        "service": "WCS",
-        "version": "2.0.1",
-        "request": "GetCoverage",
-        "coverageId": coverage_id(year),
-        "subset": [f"X({minx},{maxx})", f"Y({miny},{maxy})"],
-        "format": "image/geotiff",
-    }
+    if source == "annual":
+        url = ANNUAL_WCS_URL
+        width = int(round((maxx - minx) / PREP_CELL_SIZE))
+        height = int(round((maxy - miny) / PREP_CELL_SIZE))
+        params = {
+            "service": "WCS",
+            "version": "1.0.0",
+            "request": "GetCoverage",
+            "coverage": ANNUAL_COVERAGE,
+            "bbox": f"{minx},{miny},{maxx},{maxy}",
+            "crs": "EPSG:5070",
+            "format": "GeoTIFF",
+            "width": str(width),
+            "height": str(height),
+            "TIME": f"{year}-01-01",
+        }
+    else:
+        url = WCS_URL
+        params = {
+            "service": "WCS",
+            "version": "2.0.1",
+            "request": "GetCoverage",
+            "coverageId": coverage_id(year),
+            "subset": [f"X({minx},{maxx})", f"Y({miny},{maxy})"],
+            "format": "image/geotiff",
+        }
     last_error = None
     for _attempt in range(3):
         try:
             response = request_with_ssl_fallback(
-                "GET", WCS_URL, message_callback=message_callback,
+                "GET", url, message_callback=message_callback,
                 params=params, timeout=180,
             )
             response.raise_for_status()
             content_type = response.headers.get("content-type", "")
             if "tif" not in content_type and "image" not in content_type:
                 raise RuntimeError(
-                    "The MRLC service returned an unexpected response "
+                    "The land cover service returned an unexpected response "
                     f"({content_type}): {response.text[:300]}"
                 )
             with MemoryFile(response.content) as memfile:
@@ -195,11 +304,15 @@ def _fetch_tile(year, bounds, message_callback=None):
                         raise RuntimeError(
                             f"Unexpected tile CRS {src.crs}, expected EPSG:5070"
                         )
-                    return src.read(1), src.transform
+                    data = src.read(1)
+                    if source == "annual":
+                        # Annual NLCD background value -> app-wide NoData
+                        data[data == ANNUAL_SOURCE_NODATA] = NLCD_NODATA
+                    return data, src.transform
         except Exception as exc:
             last_error = exc
     raise RuntimeError(
-        f"Could not download an NLCD tile from the MRLC service after 3 "
+        f"Could not download a {product_label(year, source)} tile after 3 "
         f"attempts. Details: {last_error}"
     )
 
@@ -263,46 +376,84 @@ def fetch_nlcd_data(
             tile_miny = tile_maxy - tile_h * PREP_CELL_SIZE
             tiles.append((row_off, col_off, (tile_minx, tile_miny, tile_maxx, tile_maxy)))
 
-    say(
-        f"NLCD {year}: downloading {width:,} x {height:,} cells in "
-        f"{len(tiles)} tile(s) from the MRLC service",
-        message_callback,
-    )
-    _progress(0.02, f"NLCD {year}: requesting land cover tiles")
+    # Pick the product for this year: epoch releases for 2001-2021, Annual
+    # NLCD otherwise. When both services offer the year, the other one is
+    # kept as a fallback in case the primary cannot be reached.
+    epoch_set = set(_epoch_years(message_callback))
+    annual_set = set(_annual_years(message_callback))
+    if year in epoch_set:
+        sources = ["epoch"] + (["annual"] if year in annual_set else [])
+    elif year in annual_set:
+        sources = ["annual"]
+    else:
+        raise RuntimeError(
+            f"NLCD land cover is not available for the year {year}. "
+            "Pick one of the years offered in the dropdown."
+        )
 
-    mosaic = np.full((height, width), NLCD_NODATA, dtype=np.uint8)
     total = len(tiles)
-    done = 0
 
-    def _download(tile):
-        row_off, col_off, bounds = tile
-        data, tile_transform = _fetch_tile(year, bounds, message_callback)
-        return row_off, col_off, bounds, data, tile_transform
+    def _download_all(source):
+        """Download every tile from one service and return the mosaic."""
+        label = product_label(year, source)
+        say(
+            f"{label}: downloading {width:,} x {height:,} cells in "
+            f"{total} tile(s)",
+            message_callback,
+        )
+        _progress(0.02, f"{label}: requesting land cover tiles")
+        grid = np.full((height, width), NLCD_NODATA, dtype=np.uint8)
+        done = 0
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        for row_off, col_off, bounds, data, tile_transform in pool.map(_download, tiles):
-            # Place the tile by its own georeferencing so a one-cell shift
-            # in the service response cannot misalign the mosaic.
-            col_start = int(round((tile_transform.c - transform.c) / PREP_CELL_SIZE))
-            row_start = int(round((transform.f - tile_transform.f) / PREP_CELL_SIZE))
-            rows = slice(max(row_start, 0), min(row_start + data.shape[0], height))
-            cols = slice(max(col_start, 0), min(col_start + data.shape[1], width))
-            src_rows = slice(rows.start - row_start, rows.stop - row_start)
-            src_cols = slice(cols.start - col_start, cols.stop - col_start)
-            mosaic[rows, cols] = data[src_rows, src_cols]
-            done += 1
-            _progress(
-                0.02 + 0.63 * (done / total),
-                f"NLCD {year}: downloading tiles ({done} of {total})",
-            )
+        def _one(tile):
+            row_off, col_off, bounds = tile
+            data, tile_transform = _fetch_tile(year, bounds, source, message_callback)
+            return data, tile_transform
+
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+            for data, tile_transform in pool.map(_one, tiles):
+                # Place the tile by its own georeferencing so a one-cell
+                # shift in the service response cannot misalign the mosaic.
+                col_start = int(round((tile_transform.c - transform.c) / PREP_CELL_SIZE))
+                row_start = int(round((transform.f - tile_transform.f) / PREP_CELL_SIZE))
+                rows = slice(max(row_start, 0), min(row_start + data.shape[0], height))
+                cols = slice(max(col_start, 0), min(col_start + data.shape[1], width))
+                src_rows = slice(rows.start - row_start, rows.stop - row_start)
+                src_cols = slice(cols.start - col_start, cols.stop - col_start)
+                grid[rows, cols] = data[src_rows, src_cols]
+                done += 1
+                _progress(
+                    0.02 + 0.63 * (done / total),
+                    f"{label}: downloading tiles ({done} of {total})",
+                )
+        return grid
+
+    mosaic = None
+    source_used = None
+    for index, source in enumerate(sources):
+        try:
+            mosaic = _download_all(source)
+            source_used = source
+            break
+        except RuntimeError as exc:
+            if index + 1 < len(sources):
+                say(
+                    f"{product_label(year, source)} could not be downloaded "
+                    f"({exc}). Trying {product_label(year, sources[index + 1])} "
+                    "instead.",
+                    message_callback,
+                )
+                continue
+            raise
+    label = product_label(year, source_used)
 
     # Clip to the buffered watershed with the cell-center rule
-    _progress(0.68, f"NLCD {year}: clipping to the watershed")
+    _progress(0.68, f"{label}: clipping to the watershed")
     mosaic = clip_array_to_aoi(mosaic, transform, aoi["aoi_5070"], NLCD_NODATA)
     valid = mosaic[mosaic != NLCD_NODATA]
     if valid.size == 0:
         raise RuntimeError(
-            f"NLCD {year} has no land cover cells inside this watershed. "
+            f"{label} has no land cover cells inside this watershed. "
             "The MRLC L48 products cover the conterminous United States; "
             "check that the boundary is inside that area."
         )
@@ -321,7 +472,7 @@ def fetch_nlcd_data(
     summary = summary.sort_values("area_acres", ascending=False).reset_index(drop=True)
 
     # Write the clipped GeoTIFF with the official color table
-    _progress(0.75, f"NLCD {year}: writing the land cover raster")
+    _progress(0.75, f"{label}: writing the land cover raster")
     raster_path = write_raster(
         str(output_dir) + f"/nlcd_{year}_landcover.tif",
         mosaic,
@@ -329,10 +480,10 @@ def fetch_nlcd_data(
         nodata=NLCD_NODATA,
         colormap=official_colormap(),
     )
-    say(f"NLCD {year}: raster saved: {raster_path}", message_callback)
+    say(f"{label}: raster saved: {raster_path}", message_callback)
 
     # Convert to polygons for the CN workflow
-    _progress(0.82, f"NLCD {year}: converting land cover to polygons")
+    _progress(0.82, f"{label}: converting land cover to polygons")
     landuse_gdf = polygonize_classified_raster(
         mosaic, transform, NLCD_NODATA, crs=PREP_CRS, value_field="gridcode"
     )
@@ -340,22 +491,24 @@ def fetch_nlcd_data(
         lambda code: NLCD_CLASSES.get(int(code), f"Unknown ({int(code)})")
     )
     say(
-        f"NLCD {year}: {len(landuse_gdf):,} land use polygons created",
+        f"{label}: {len(landuse_gdf):,} land use polygons created",
         message_callback,
     )
 
-    _progress(0.92, f"NLCD {year}: writing the land use shapefile")
+    _progress(0.92, f"{label}: writing the land use shapefile")
     zip_path = write_shapefile_zip(
         landuse_gdf, output_dir, f"nlcd_{year}_landuse_polygons"
     )
-    say(f"NLCD {year}: shapefile saved: {zip_path}", message_callback)
-    _progress(1.0, f"NLCD {year}: done")
+    say(f"{label}: shapefile saved: {zip_path}", message_callback)
+    _progress(1.0, f"{label}: done")
 
     return {
         "zip_path": zip_path,
         "raster_path": raster_path,
         "summary": summary,
         "year": year,
+        "source": source_used,
+        "product": label,
         "cell_count": int(valid.size),
         "polygon_count": len(landuse_gdf),
     }

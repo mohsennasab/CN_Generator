@@ -55,7 +55,8 @@ def create_prep_report(soil_info=None, nlcd_info=None):
     html = _TABLE_STYLE + '<div class="prep-report">'
 
     if nlcd_info is not None:
-        html += f"<h2>NLCD {nlcd_info['year']} Land Cover: Area by Class</h2>"
+        product = nlcd_info.get("product", f"NLCD {nlcd_info['year']}")
+        html += f"<h2>{product} Land Cover: Area by Class</h2>"
         html += _area_table(
             nlcd_info["summary"],
             ["gridcode", "landuse", "area_acres", "percent_area"],

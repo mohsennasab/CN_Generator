@@ -69,6 +69,7 @@ def create_prep_map(
     soil_raster_path=None,
     nlcd_summary=None,
     soil_summary=None,
+    nlcd_label=None,
 ):
     """
     Build the Data Preparation preview map as embeddable HTML.
@@ -119,7 +120,12 @@ def create_prep_map(
         for code, hex_color in NLCD_COLORS.items():
             lut[code] = _hex_to_rgb(hex_color) + (255,)
         lut[NLCD_NODATA] = (0, 0, 0, 0)
-        layer_name = f"NLCD {nlcd_year} Land Cover" if nlcd_year else "NLCD Land Cover"
+        if nlcd_label:
+            layer_name = f"{nlcd_label} Land Cover"
+        elif nlcd_year:
+            layer_name = f"NLCD {nlcd_year} Land Cover"
+        else:
+            layer_name = "NLCD Land Cover"
         _add_raster_overlay(
             m, nlcd_raster_path, lut, layer_name, show=True, nodata=NLCD_NODATA
         )

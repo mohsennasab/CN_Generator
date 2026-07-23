@@ -664,6 +664,7 @@ def process_data_preparation(
             soil_raster_path=result["soil_raster"],
             nlcd_summary=nlcd_info["summary"] if nlcd_info else None,
             soil_summary=soil_info["summary"] if soil_info else None,
+            nlcd_label=nlcd_info["product"] if nlcd_info else None,
         )
 
         elapsed = time.time() - start_time
@@ -1100,9 +1101,9 @@ def create_interface():
 
                 nlcd_year = gr.Dropdown(
                     label="NLCD Land Cover Year",
-                    choices=[str(year) for year in data_prep.FALLBACK_YEARS],
-                    value=str(data_prep.FALLBACK_YEARS[0]),
-                    info="Available years are refreshed from the MRLC service when the app starts. New releases appear automatically."
+                    choices=data_prep.fallback_year_choices(),
+                    value=data_prep.fallback_year_choices()[0][1],
+                    info="Years 2001-2021 come from the NLCD epoch releases (MRLC); all other years, including the most recent, come from Annual NLCD (USGS). The list is refreshed from the official services when the app starts, so new years appear automatically."
                 )
 
                 gr.HTML('<div class="workflow-subhead">2. Download &amp; Process</div>')
@@ -1483,14 +1484,12 @@ def create_interface():
         )
 
         def refresh_nlcd_years():
-            """Refresh the NLCD year list from the MRLC service (cached)."""
+            """Refresh the NLCD year list from the official services (cached)."""
             try:
-                years = data_prep.available_nlcd_years()
+                choices = data_prep.year_choices()
             except Exception:
-                years = list(data_prep.FALLBACK_YEARS)
-            return gr.update(
-                choices=[str(year) for year in years], value=str(years[0])
-            )
+                choices = data_prep.fallback_year_choices()
+            return gr.update(choices=choices, value=choices[0][1])
 
         demo.load(fn=refresh_nlcd_years, outputs=[nlcd_year])
 
