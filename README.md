@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="Logo/CN_Generator.png" alt="Curve Number Studio logo" width="180">
+  <img src="Logo/CNStudio.png" alt="Curve Number Studio logo" width="240">
 </p>
 
 # Curve Number Studio
