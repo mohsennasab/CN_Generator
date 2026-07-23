@@ -88,20 +88,21 @@ Install the developer/build dependencies:
 Build the package:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\build_windows_package.ps1 -Version 0.4.0
+powershell -ExecutionPolicy Bypass -File tools\build_windows_package.ps1 -Version 0.5.0
 ```
 
 The build creates:
 
 ```text
-release/Curve_Number_Studio_Windows_0.4.0/
-release/Curve_Number_Studio_Windows_0.4.0.zip
+release/Curve_Number_Studio_Windows_0.5.0/
+release/Curve_Number_Studio_Windows_0.5.0.zip
 ```
 
 The script zips the package with .NET so that the hidden `_internal` folder is included, then verifies that the zip holds the same number of files as the package folder. Upload the zip file to a GitHub Release so non-developer users can download it.
 
 ## Features
 
+- Optionally download and prepare the input data automatically: SSURGO soil polygons with hydrologic soil groups from USDA Soil Data Access, and NLCD land cover from the official MRLC service, clipped to your watershed and ready to use.
 - Upload soil and land use datasets and compute CN polygons and a CN raster.
 - Use the built-in NLCD lookup or provide a custom CSV lookup table.
 - Automatically handle CRS mismatch and dual hydrologic groups such as `A/D`, `B/D`, and `C/D`.
@@ -111,11 +112,30 @@ The script zips the package with .NET so that the hidden `_internal` folder is i
 - Export CN polygons as GeoPackage and CN raster as GeoTIFF.
 - Save every run's GIS outputs and statistics tables, plus a dated model run log, to a Results folder next to the app. The report and map are shown in the app and are not written to the Results folder.
 
+## Data Preparation (Optional)
+
+The Data Preparation tab (tab 2) can download and process the soil and land use inputs for you, using only the watershed boundary uploaded in tab 1. It is optional: if you already have your own layers, skip it and upload them in tab 3 as before.
+
+What it does:
+
+- **Soil data**: queries USDA-NRCS Soil Data Access, the official live service for the SSURGO database, and downloads the soil map unit polygons that intersect your watershed together with the dominant-condition hydrologic soil group field (`hydgrpdcd`: A, B, C, D, and dual groups such as A/D). The polygons are saved as a zipped shapefile and also rasterized to a 30 m hydrologic soil group GeoTIFF you can download.
+- **Land use data**: downloads NLCD land cover from the official MRLC Web Coverage Service on its native 30 m Conus Albers grid, clipped to your watershed, with the official NLCD colors embedded in the GeoTIFF. The grid is also converted to land use polygons with the standard NLCD codes (`gridcode`) and saved as a zipped shapefile. The NLCD year is picked from a dropdown; the list of available years is read from the MRLC service when the app starts, so new releases appear automatically.
+- Both layers are clipped to the watershed plus a small 90 m buffer, so the soil and land use intersection in the CN workflow fully covers every boundary cell. The final CN raster is still clipped exactly to the boundary.
+- When preparation finishes, the two zipped shapefiles are loaded into the CN workflow (tab 3) automatically, the field mappings are already correct (`hydgrpdcd` and `gridcode`), and a preview map shows the land cover, the soil groups, and the watershed boundary as toggleable layers.
+- All prepared files, plus a dated log, are saved to a `DataPrep` subfolder inside `Results` so you can reuse them later without downloading again.
+
+A few things worth knowing:
+
+- Data preparation needs an internet connection. Soil data covers the United States and territories (SSURGO); NLCD land cover covers the conterminous United States.
+- Large watersheds are downloaded in small chunks with visible progress, so the app stays responsive. Very large areas are refused with a clear message instead of exhausting memory; the practical limits are far beyond a typical HUC8 watershed.
+- On corporate VPNs that inspect secure traffic, downloads retry once with certificate verification turned off, the same fallback the GCN10 reader uses, and the retry is recorded in the log.
+- Some SSURGO map units (often water bodies, urban land, or pits) have no hydrologic group. They are kept in the soil layer and reported by the CN workflow as missing hydrogroups, never guessed.
+
 ## GCN10 Global Dataset (Optional)
 
 The app can read the GCN10 global 10 m Curve Number dataset for your watershed. GCN10 was built by Muhammad Abdullah Azzam and Huidae Cho at New Mexico State University from ESA WorldCover 2021 land cover and HYSOGs250m hydrologic soil groups.
 
-The GCN10 option lives in tab 3 of the app and is on by default. Turn it off there if you are offline or do not need the global dataset. With GCN10 enabled you can:
+The GCN10 option lives in tab 4 of the app and is on by default. Turn it off there if you are offline or do not need the global dataset. With GCN10 enabled you can:
 
 - Pick the hydrologic condition (Poor, Fair, Good), antecedent runoff condition (ARC I, II, III), and drainage assumption (Drained, Undrained). The defaults are Fair, ARC II, Undrained.
 - See the GCN10 raster on the interactive map and turn it on or off with the layer control.
@@ -123,7 +143,7 @@ The GCN10 option lives in tab 3 of the app and is on by default. Turn it off the
 - Download GCN10 watershed statistics as a CSV file.
 - Compare your generated CN values with GCN10 side by side, per watershed, with a mean difference column.
 
-You can also run GCN10 alone without soil and land use data. Uncheck the box at the top of tab 2, upload a watershed boundary in tab 1, and keep GCN10 enabled in tab 3.
+You can also run GCN10 alone without soil and land use data. Uncheck the box at the top of tab 3, upload a watershed boundary in tab 1, and keep GCN10 enabled in tab 4.
 
 A few things worth knowing:
 
@@ -145,6 +165,7 @@ Citation: Azzam, M. A., Cho, H., 2026. GCN10: An MPI-parallelized framework for 
 
 ## Processing Overview
 
+0. Optional: download and prepare the soil and land use layers automatically in the Data Preparation tab (SSURGO soils via Soil Data Access, NLCD land cover via the MRLC service), clipped to the watershed plus a 90 m buffer.
 1. Validate uploaded soil, land use, and optional watershed files.
 2. Load geospatial layers with GeoPandas.
 3. Load the built-in NLCD lookup table or a custom CSV lookup.
@@ -180,7 +201,13 @@ Citation: Azzam, M. A., Cho, H., 2026. GCN10: An MPI-parallelized framework for 
 |   |-- cn_statistics.py
 |   |-- zonal_exact.py
 |   |-- gcn10.py
-|   `-- visualization.py
+|   |-- visualization.py
+|   `-- data_prep/
+|       |-- common.py
+|       |-- soil.py
+|       |-- nlcd.py
+|       |-- prep_map.py
+|       `-- report.py
 `-- tools/
     |-- build_windows_package.ps1
     |-- install_dependencies.ps1

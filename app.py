@@ -16,6 +16,7 @@ from src.spatial_operations import SpatialOperations
 from src.cn_statistics import CNStatistics
 from src.visualization import CNVisualization
 from src import gcn10
+from src import data_prep
 import json
 import zipfile
 import time
@@ -24,7 +25,7 @@ from datetime import datetime
 # App identity. The GUI header must always show the app name with the
 # current version next to it. Bump APP_VERSION with every release.
 APP_NAME = "Curve Number Studio"
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.5.0"
 
 # Default configuration
 DEFAULT_CRS = "EPSG:4326"
@@ -286,17 +287,21 @@ def process_curve_numbers(
             logger.log("Nothing to process: both workflows are disabled")
             return build_result(status_message=(
                 "Nothing to process. Enable at least one workflow: generate CN "
-                "from your own soil and land use data (tab 2), or include the "
-                "GCN10 global dataset (tab 3)."))
+                "from your own soil and land use data (tab 3), or include the "
+                "GCN10 global dataset (tab 4)."))
 
         # Validate inputs for the user CN workflow
         if run_user_cn:
             if soil_file is None:
                 logger.log("Run stopped: no soil layer uploaded")
-                return build_result(status_message="Please upload a soil layer in tab 2")
+                return build_result(status_message=(
+                    "Please upload a soil layer in tab 3, or prepare one "
+                    "automatically in the Data Preparation tab (tab 2)"))
             if landuse_file is None:
                 logger.log("Run stopped: no land use layer uploaded")
-                return build_result(status_message="Please upload a land use layer in tab 2")
+                return build_result(status_message=(
+                    "Please upload a land use layer in tab 3, or prepare one "
+                    "automatically in the Data Preparation tab (tab 2)"))
 
             # Validate shapefile uploads (only show warnings, don't block processing)
             soil_valid, soil_msg = validate_shapefile_upload(soil_file)
@@ -313,7 +318,7 @@ def process_curve_numbers(
             return build_result(status_message=(
                 "GCN10 needs a boundary to clip to. Upload a watershed boundary "
                 "layer in the Input Data tab (tab 1), or also enable CN "
-                "generation from your own data (tab 2)."))
+                "generation from your own data (tab 3)."))
 
         # Load the watershed layer once; both workflows can use it
         watershed_gdf = None
@@ -560,6 +565,138 @@ def process_curve_numbers(
             f"See the run log in: {run_dir}"
         )
         return build_result(status_message=error_display)
+
+def process_data_preparation(
+    watershed_file,
+    watershed_field,
+    prep_soil,
+    prep_nlcd,
+    nlcd_year,
+    progress=None,
+):
+    """
+    Run the optional Data Preparation workflow: download soil and NLCD land
+    cover data for the watershed and package them for the CN workflow.
+
+    Returns a dict with output paths, the report and map HTML, and a status
+    message. Keys are None when a product was not produced.
+    """
+    start_time = time.time()
+    result = {
+        "soil_zip": None, "soil_raster": None,
+        "nlcd_zip": None, "nlcd_raster": None,
+        "report_html": None, "map_html": None, "status": "",
+        "succeeded": False,
+    }
+
+    if watershed_file is None:
+        result["status"] = (
+            "Please upload a watershed boundary layer in the Input Data tab "
+            "(tab 1) first. Data preparation downloads soil and land cover "
+            "data for that boundary.")
+        return result
+    if not prep_soil and not prep_nlcd:
+        result["status"] = (
+            "Nothing to prepare. Check at least one dataset: soil data, "
+            "NLCD land cover, or both.")
+        return result
+
+    run_stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    run_dir = RESULTS_ROOT / f"DataPrep_{run_stamp}"
+    try:
+        run_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        result["status"] = f"Could not create the results folder at {run_dir}: {e}"
+        return result
+
+    logger = RunLogger(run_dir / f"data_prep_log_{run_stamp}.txt")
+    logger.log(f"{APP_NAME} data preparation started")
+    logger.log(f"Results folder: {run_dir}")
+
+    try:
+        update_progress(progress, 0.02, "Reading the watershed boundary", logger)
+        watershed_path = getattr(watershed_file, "name", watershed_file)
+        watershed_gdf = gpd.read_file(watershed_path)
+        logger.log(f"Watershed layer loaded: {len(watershed_gdf)} polygons")
+
+        soil_info = None
+        nlcd_info = None
+
+        # Progress is split between the enabled downloads
+        soil_span = (0.05, 0.50) if prep_nlcd else (0.05, 0.85)
+        nlcd_span = (0.50, 0.85) if prep_soil else (0.05, 0.85)
+
+        if prep_soil:
+            lo, hi = soil_span
+
+            def soil_progress(fraction, description):
+                update_progress(progress, lo + (hi - lo) * fraction, description, logger)
+
+            soil_info = data_prep.fetch_soil_data(
+                watershed_gdf, run_dir,
+                progress_callback=soil_progress,
+                message_callback=logger.log,
+            )
+            result["soil_zip"] = soil_info["zip_path"]
+            result["soil_raster"] = soil_info["raster_path"]
+
+        if prep_nlcd:
+            lo, hi = nlcd_span
+
+            def nlcd_progress(fraction, description):
+                update_progress(progress, lo + (hi - lo) * fraction, description, logger)
+
+            nlcd_info = data_prep.fetch_nlcd_data(
+                watershed_gdf, int(nlcd_year), run_dir,
+                progress_callback=nlcd_progress,
+                message_callback=logger.log,
+            )
+            result["nlcd_zip"] = nlcd_info["zip_path"]
+            result["nlcd_raster"] = nlcd_info["raster_path"]
+
+        update_progress(progress, 0.90, "Building the preview map and summary", logger)
+        result["report_html"] = data_prep.create_prep_report(soil_info, nlcd_info)
+        result["map_html"] = data_prep.create_prep_map(
+            watershed_gdf,
+            watershed_field=watershed_field,
+            nlcd_raster_path=result["nlcd_raster"],
+            nlcd_year=nlcd_info["year"] if nlcd_info else None,
+            soil_raster_path=result["soil_raster"],
+            nlcd_summary=nlcd_info["summary"] if nlcd_info else None,
+            soil_summary=soil_info["summary"] if soil_info else None,
+        )
+
+        elapsed = time.time() - start_time
+        loaded = []
+        if result["soil_zip"]:
+            loaded.append("soil layer")
+        if result["nlcd_zip"]:
+            loaded.append("land use layer")
+        handoff = (
+            f" The {' and '.join(loaded)} were loaded into the CN workflow "
+            "(tab 3) automatically; you can replace them there anytime."
+            if loaded else ""
+        )
+        result["status"] = (
+            f"Data preparation completed in {elapsed:.1f} seconds. "
+            f"Files saved to: {run_dir}.{handoff}"
+        )
+        result["succeeded"] = True
+        update_progress(progress, 1.0, "Data preparation complete", logger)
+        logger.log(f"Data preparation finished in {elapsed:.1f} seconds")
+        return result
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        elapsed = time.time() - start_time
+        logger.log(f"ERROR after {elapsed:.1f} seconds: {str(e)}")
+        logger.log(traceback.format_exc())
+        result["status"] = (
+            f"Data preparation stopped after {elapsed:.1f} seconds: {str(e)} "
+            f"See the log in: {run_dir}")
+        return result
+
 
 # Create Gradio interface
 def create_interface():
@@ -860,12 +997,13 @@ def create_interface():
                 <div class="how-to-use">
                     <h3>How to Use</h3>
                     <ol>
-                        <li><strong>Input Data:</strong> upload your watershed or subbasin boundaries. This single layer is shared by both workflows below: per-basin statistics for your own CN results and the clipping boundary for GCN10</li>
-                        <li><strong>CN from Soil &amp; Land Use (optional):</strong> upload your soil and land use layers, check the field mappings, and set the processing parameters (coordinate system, cell size, dual soil-group handling)</li>
-                        <li><strong>GCN10 Global Dataset (optional):</strong> add the global 10 m Curve Number dataset to view, download, and compare. It is on by default and needs internet; turn it off in tab 3 to run fully offline</li>
+                        <li><strong>Input Data:</strong> upload your watershed or subbasin boundaries. This single layer is shared by all workflows below: it drives the optional data downloads, per-basin statistics for your own CN results, and the clipping boundary for GCN10</li>
+                        <li><strong>Data Preparation (optional):</strong> let the app download and process soil data (SSURGO hydrologic soil groups) and NLCD land cover for your watershed. The prepared layers are loaded into the next step automatically and are also saved as zipped shapefiles and rasters you can reuse. Needs internet and a watershed inside the United States</li>
+                        <li><strong>CN from Soil &amp; Land Use (optional):</strong> use the prepared layers, or upload your own soil and land use data, check the field mappings, and set the processing parameters (coordinate system, cell size, dual soil-group handling)</li>
+                        <li><strong>GCN10 Global Dataset (optional):</strong> add the global 10 m Curve Number dataset to view, download, and compare. It is on by default and needs internet; turn it off in tab 4 to run fully offline</li>
                         <li><strong>Run &amp; Results:</strong> click Calculate Curve Numbers and review the report, map, and downloads. All output files are also saved to a Results folder next to the app, along with a model run log</li>
                     </ol>
-                    <p>Steps 2 and 3 are independent: run either one alone or both together to compare them. Enable at least one before calculating. Running GCN10 alone requires the watershed boundary from step 1.</p>
+                    <p>Steps 2, 3, and 4 are independent: skip data preparation if you already have layers, and run either CN workflow alone or both together to compare them. Enable at least one CN workflow before calculating. Running GCN10 alone requires the watershed boundary from step 1.</p>
 
                     <h3>Supported Upload Formats</h3>
                     <p>Every layer upload accepts a ZIP shapefile archive, a GeoPackage (<code>.gpkg</code>), or a GeoJSON (<code>.geojson</code>/<code>.json</code>) file.</p>
@@ -888,8 +1026,9 @@ def create_interface():
                 gr.HTML("""
                 <div class="workflow-hint">
                     Upload your watershed or subbasin boundaries here. This is the one shared input for
-                    both optional workflows: it provides per-basin CN statistics for your own soil and
-                    land use data (tab 2) and the clipping boundary for the GCN10 global dataset (tab 3).
+                    the optional workflows: it defines the area for automatic data downloads (tab 2),
+                    provides per-basin CN statistics for your own soil and land use data (tab 3), and is
+                    the clipping boundary for the GCN10 global dataset (tab 4).
                     Accepted formats: ZIP shapefile archive (<code>.shp</code>, <code>.shx</code>,
                     <code>.dbf</code>, <code>.prj</code>), GeoPackage (<code>.gpkg</code>), or GeoJSON
                     (<code>.geojson</code>/<code>.json</code>).
@@ -918,7 +1057,7 @@ def create_interface():
                 )
 
                 with gr.Row(elem_classes=["next-row"]):
-                    next_btn_inputs = gr.Button("Next: CN from Soil & Land Use", variant="secondary")
+                    next_btn_inputs = gr.Button("Next: Data Preparation", variant="secondary")
 
                 watershed_file.change(
                     fn=lambda file: get_column_options(
@@ -930,18 +1069,84 @@ def create_interface():
                     outputs=[watershed_field]
                 )
 
-            with gr.Tab("2. CN from Soil & Land Use (Optional)", id="usercn") as tab_usercn:
+            with gr.Tab("2. Data Preparation (Optional)", id="dataprep") as tab_dataprep:
+                gr.HTML(f"""
+                <div class="workflow-hint">
+                    Optionally let the app download and process the input data for the CN workflow:
+                    soil data with hydrologic soil groups from the USDA <strong>SSURGO</strong> database
+                    (via Soil Data Access) and <strong>NLCD land cover</strong> from the official MRLC
+                    service. Both are clipped to the watershed uploaded in tab 1 (plus a small
+                    {data_prep.BOUNDARY_BUFFER_M:.0f} m buffer so boundary cells are fully covered),
+                    packaged as zipped shapefiles, and loaded into the CN workflow (tab 3)
+                    automatically. The clipped rasters are also available for download. Large
+                    watersheds are downloaded in small chunks so the app stays responsive. Needs an
+                    internet connection and a watershed inside the United States (NLCD: conterminous US).
+                </div>
+                """)
+
+                gr.HTML('<div class="workflow-subhead">1. Datasets to Prepare</div>')
+
+                prep_soil = gr.Checkbox(
+                    label="Soil data: SSURGO map units with hydrologic soil groups (USDA-NRCS)",
+                    value=True,
+                    info="Downloads the official soil polygons with the hydgrpdcd field (A, B, C, D, and dual groups)."
+                )
+
+                prep_nlcd = gr.Checkbox(
+                    label="Land use data: NLCD land cover (USGS / MRLC)",
+                    value=True,
+                    info="Downloads NLCD land cover at its native 30 m resolution and converts it to land use polygons with the standard NLCD codes."
+                )
+
+                nlcd_year = gr.Dropdown(
+                    label="NLCD Land Cover Year",
+                    choices=[str(year) for year in data_prep.FALLBACK_YEARS],
+                    value=str(data_prep.FALLBACK_YEARS[0]),
+                    info="Available years are refreshed from the MRLC service when the app starts. New releases appear automatically."
+                )
+
+                gr.HTML('<div class="workflow-subhead">2. Download &amp; Process</div>')
+                gr.HTML('<div class="tip-line">Tip: a typical HUC12 watershed takes a few seconds; large watersheds take longer and show progress as chunks are downloaded.</div>')
+
+                prepare_btn = gr.Button(
+                    "Download & Prepare Data",
+                    variant="primary",
+                )
+
+                prep_status = gr.HTML(visible=False, elem_classes="processing-status")
+
+                with gr.Row():
+                    prep_soil_zip = gr.File(label="Soil Layer (ZIP shapefile)", visible=False)
+                    prep_soil_raster = gr.File(label="Soil HSG Raster (GeoTIFF)", visible=False)
+                    prep_nlcd_zip = gr.File(label="Land Use Layer (ZIP shapefile)", visible=False)
+                    prep_nlcd_raster = gr.File(label="NLCD Land Cover Raster (GeoTIFF)", visible=False)
+
+                prep_report = gr.HTML(visible=False)
+                prep_map = gr.HTML(elem_classes="map-container", visible=False)
+
+                gr.HTML(f"""
+                <div style="font-size: 12px; margin-top: 10px; color: var(--body-text-color-subdued, #666);">
+                    Data credits: <a href="{data_prep.NLCD_DATASET_URL}" target="_blank">{data_prep.NLCD_ATTRIBUTION}</a> |
+                    <a href="{data_prep.SDA_DATASET_URL}" target="_blank">{data_prep.SDA_ATTRIBUTION}</a>
+                </div>
+                """)
+
+                with gr.Row(elem_classes=["next-row"]):
+                    next_btn_dataprep = gr.Button("Next: CN from Soil & Land Use", variant="secondary")
+
+            with gr.Tab("3. CN from Soil & Land Use (Optional)", id="usercn") as tab_usercn:
                 gr.HTML("""
                 <div class="workflow-hint">
-                    Generate Curve Numbers from your own soil and land use layers. This workflow is
-                    optional and independent of GCN10 (tab 3): enable either one or both.
+                    Generate Curve Numbers from your own soil and land use layers, or from the layers
+                    prepared automatically in tab 2 (they appear below after preparation finishes).
+                    This workflow is optional and independent of GCN10 (tab 4): enable either one or both.
                 </div>
                 """)
 
                 run_user_cn = gr.Checkbox(
                     label="Generate CN from my soil and land use data",
                     value=True,
-                    info="Uncheck to skip this workflow, e.g. to run only the GCN10 global dataset (tab 3). GCN10-only runs need the watershed boundary from tab 1."
+                    info="Uncheck to skip this workflow, e.g. to run only the GCN10 global dataset (tab 4). GCN10-only runs need the watershed boundary from tab 1."
                 )
 
                 with gr.Group(visible=True) as user_cn_options:
@@ -1076,10 +1281,10 @@ def create_interface():
                     outputs=[lookup_file]
                 )
 
-            with gr.Tab("3. GCN10 Global Dataset (Optional)", id="gcn10") as tab_gcn10:
+            with gr.Tab("4. GCN10 Global Dataset (Optional)", id="gcn10") as tab_gcn10:
                 gr.HTML("""
                 <div class="workflow-hint">
-                    GCN10 is a global 10 m Curve Number dataset by Azzam and Cho (2026), built from ESA WorldCover 2021 land cover and HYSOGs250m soil groups. Enable it to view the GCN10 raster on the map, download it for your watershed, and compare it with your own results. It is clipped to the watershed boundary uploaded in tab 1 (or, if none is uploaded, to the CN polygons generated in tab 2). This workflow is independent of tab 2: enable either one or both. The app streams only the data covering your area, so a typical run adds a few seconds. Needs an internet connection during processing.
+                    GCN10 is a global 10 m Curve Number dataset by Azzam and Cho (2026), built from ESA WorldCover 2021 land cover and HYSOGs250m soil groups. Enable it to view the GCN10 raster on the map, download it for your watershed, and compare it with your own results. It is clipped to the watershed boundary uploaded in tab 1 (or, if none is uploaded, to the CN polygons generated in tab 3). This workflow is independent of tab 3: enable either one or both. The app streams only the data covering your area, so a typical run adds a few seconds. Needs an internet connection during processing.
                 </div>
                 """)
 
@@ -1127,10 +1332,10 @@ def create_interface():
                     outputs=[gcn10_options]
                 )
 
-            with gr.Tab("4. Run & Results", id="results") as tab_results:
+            with gr.Tab("5. Run & Results", id="results") as tab_results:
                 gr.HTML("""
                 <div class="workflow-hint">
-                    Set up tabs 1 to 3, then click Calculate Curve Numbers below. The report, map, and download files appear here when processing finishes, and every output is also saved to a Results folder next to the app.
+                    Set up tabs 1 to 4, then click Calculate Curve Numbers below. The report, map, and download files appear here when processing finishes, and every output is also saved to a Results folder next to the app.
                 </div>
                 """)
 
@@ -1186,15 +1391,33 @@ def create_interface():
                 Learn how to calculate CN in ArcGIS Pro:
                 - [Create Curve Number CN Raster Using ArcHydro Tools](https://www.hydromohsen.com/create-curve-number-cn-raster-for-a-watershed)
 
+                ### About the Data Preparation Sources
+
+                The optional Data Preparation tab downloads its layers from two official, free
+                US government services:
+
+                - **Soils**: USDA-NRCS [Soil Data Access](https://sdmdataaccess.nrcs.usda.gov/), the
+                  live query service for the Soil Survey Geographic (SSURGO) Database. The app fetches
+                  the soil map unit polygons intersecting your watershed together with the
+                  dominant-condition hydrologic soil group (`hydgrpdcd`: A, B, C, D, and dual groups).
+                - **Land cover**: the [MRLC Consortium](https://www.mrlc.gov/) Web Coverage Service for
+                  the National Land Cover Database (NLCD), on its native 30 m Conus Albers grid with
+                  the official class colors.
+
                 ### References
                 - [USDA Technical Release 55](https://www.hydrocad.net/pdf/TR-55%20Manual.pdf) - Official documentation
                 - [National Land Cover Database](https://www.mrlc.gov/) - Land cover data
+                - [USDA Soil Data Access](https://sdmdataaccess.nrcs.usda.gov/) - SSURGO soil database query service
                 - [HEC-HMS CN Grid Guide](https://www.hec.usace.army.mil/confluence/hmsdocs/hmsguides/gis-tools-and-terrain-data/gis-tutorials-and-guides/creating-a-curve-number-grid-and-computing-subbasin-average-curve-number-values) - Technical guide
                 - [SSURGO Soil Data Downloader](https://www.arcgis.com/apps/View/index.html?appid=cdc49bd63ea54dd2977f3f2853e07fff) - Soil data source
                 """)
 
         # Next buttons walk the user through the setup tabs in order
         next_btn_inputs.click(
+            fn=lambda: gr.Tabs(selected="dataprep"),
+            outputs=[workflow_tabs],
+        )
+        next_btn_dataprep.click(
             fn=lambda: gr.Tabs(selected="usercn"),
             outputs=[workflow_tabs],
         )
@@ -1206,6 +1429,70 @@ def create_interface():
             fn=lambda: gr.Tabs(selected="results"),
             outputs=[workflow_tabs],
         )
+
+        def run_data_preparation(watershed_file_value, watershed_field_value,
+                                 prep_soil_value, prep_nlcd_value, nlcd_year_value,
+                                 progress=gr.Progress(track_tqdm=True)):
+            """Run data preparation and hand the layers to the CN workflow tab."""
+            # Show the in-progress status right away
+            yield (
+                gr.update(value='<div class="processing-status">Data preparation started. Progress details will appear at the top right while the app runs.</div>', visible=True),
+                gr.update(),  # prep_report
+                gr.update(),  # prep_map
+                gr.update(),  # prep_soil_zip
+                gr.update(),  # prep_soil_raster
+                gr.update(),  # prep_nlcd_zip
+                gr.update(),  # prep_nlcd_raster
+                gr.update(),  # soil_file (tab 3)
+                gr.update(),  # landuse_file (tab 3)
+            )
+
+            result = process_data_preparation(
+                watershed_file_value, watershed_field_value,
+                prep_soil_value, prep_nlcd_value, nlcd_year_value,
+                progress=progress,
+            )
+
+            status_class = (
+                "processing-status processing-complete" if result["succeeded"]
+                else "processing-status processing-error"
+            )
+            yield (
+                gr.update(value=f'<div class="{status_class}">{result["status"]}</div>', visible=True),
+                gr.update(value=result["report_html"], visible=result["report_html"] is not None),
+                gr.update(value=result["map_html"], visible=result["map_html"] is not None),
+                gr.update(value=result["soil_zip"], visible=result["soil_zip"] is not None),
+                gr.update(value=result["soil_raster"], visible=result["soil_raster"] is not None),
+                gr.update(value=result["nlcd_zip"], visible=result["nlcd_zip"] is not None),
+                gr.update(value=result["nlcd_raster"], visible=result["nlcd_raster"] is not None),
+                # Hand the prepared layers to the CN workflow; its field
+                # dropdowns update through the existing change handlers.
+                gr.update(value=result["soil_zip"]) if result["soil_zip"] else gr.update(),
+                gr.update(value=result["nlcd_zip"]) if result["nlcd_zip"] else gr.update(),
+            )
+
+        prepare_btn.click(
+            fn=run_data_preparation,
+            inputs=[watershed_file, watershed_field, prep_soil, prep_nlcd, nlcd_year],
+            outputs=[
+                prep_status, prep_report, prep_map,
+                prep_soil_zip, prep_soil_raster, prep_nlcd_zip, prep_nlcd_raster,
+                soil_file, landuse_file,
+            ],
+            show_progress_on=[prep_status],
+        )
+
+        def refresh_nlcd_years():
+            """Refresh the NLCD year list from the MRLC service (cached)."""
+            try:
+                years = data_prep.available_nlcd_years()
+            except Exception:
+                years = list(data_prep.FALLBACK_YEARS)
+            return gr.update(
+                choices=[str(year) for year in years], value=str(years[0])
+            )
+
+        demo.load(fn=refresh_nlcd_years, outputs=[nlcd_year])
 
         def update_outputs(*args, progress=gr.Progress(track_tqdm=True)):
             # Jump to the Results tab and show the processing status
