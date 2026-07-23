@@ -999,7 +999,7 @@ def create_interface():
                     <h3>How to Use</h3>
                     <ol>
                         <li><strong>Input Data:</strong> upload your watershed or subbasin boundaries. This single layer is shared by all workflows below: it drives the optional data downloads, per-basin statistics for your own CN results, and the clipping boundary for GCN10</li>
-                        <li><strong>Data Preparation (optional):</strong> let the app download and process soil data (SSURGO hydrologic soil groups) and NLCD land cover for your watershed. The prepared layers are loaded into the next step automatically and are also saved as zipped shapefiles and rasters you can reuse. Needs internet and a watershed inside the United States</li>
+                        <li><strong>Data Preparation (optional):</strong> let the app download and process soil data (SSURGO hydrologic soil groups) and Annual NLCD land cover, for any year from 1985 to the most recent release, for your watershed. The prepared layers are loaded into the next step automatically and are also saved as zipped shapefiles and rasters you can reuse. Needs internet and a watershed inside the United States</li>
                         <li><strong>CN from Soil &amp; Land Use (optional):</strong> use the prepared layers, or upload your own soil and land use data, check the field mappings, and set the processing parameters (coordinate system, cell size, dual soil-group handling)</li>
                         <li><strong>GCN10 Global Dataset (optional):</strong> add the global 10 m Curve Number dataset to view, download, and compare. It is on by default and needs internet; turn it off in tab 4 to run fully offline</li>
                         <li><strong>Run &amp; Results:</strong> click Calculate Curve Numbers and review the report, map, and downloads. All output files are also saved to a Results folder next to the app, along with a model run log</li>
@@ -1075,7 +1075,7 @@ def create_interface():
                 <div class="workflow-hint">
                     Optionally let the app download and process the input data for the CN workflow:
                     soil data with hydrologic soil groups from the USDA <strong>SSURGO</strong> database
-                    (via Soil Data Access) and <strong>NLCD land cover</strong> from the official MRLC
+                    (via Soil Data Access) and <strong>Annual NLCD land cover</strong> from the official USGS
                     service. Both are clipped to the watershed uploaded in tab 1 (plus a small
                     {data_prep.BOUNDARY_BUFFER_M:.0f} m buffer so boundary cells are fully covered),
                     packaged as zipped shapefiles, and loaded into the CN workflow (tab 3)
@@ -1094,16 +1094,16 @@ def create_interface():
                 )
 
                 prep_nlcd = gr.Checkbox(
-                    label="Land use data: NLCD land cover (USGS / MRLC)",
+                    label="Land use data: Annual NLCD land cover (USGS / MRLC)",
                     value=True,
-                    info="Downloads NLCD land cover at its native 30 m resolution and converts it to land use polygons with the standard NLCD codes."
+                    info="Downloads Annual NLCD land cover at its native 30 m resolution and converts it to land use polygons with the standard NLCD class codes."
                 )
 
                 nlcd_year = gr.Dropdown(
-                    label="NLCD Land Cover Year",
+                    label="Land Cover Year",
                     choices=data_prep.fallback_year_choices(),
                     value=data_prep.fallback_year_choices()[0][1],
-                    info="Years 2001-2021 come from the NLCD epoch releases (MRLC); all other years, including the most recent, come from Annual NLCD (USGS). The list is refreshed from the official services when the app starts, so new years appear automatically."
+                    info="Annual NLCD Collection 1 covers 1985 through the most recent release with one consistent method, so any two years can be compared. The list is refreshed from the USGS service when the app starts, so new years appear automatically."
                 )
 
                 gr.HTML('<div class="workflow-subhead">2. Download &amp; Process</div>')
@@ -1401,13 +1401,19 @@ def create_interface():
                   live query service for the Soil Survey Geographic (SSURGO) Database. The app fetches
                   the soil map unit polygons intersecting your watershed together with the
                   dominant-condition hydrologic soil group (`hydgrpdcd`: A, B, C, D, and dual groups).
-                - **Land cover**: the [MRLC Consortium](https://www.mrlc.gov/) Web Coverage Service for
-                  the National Land Cover Database (NLCD), on its native 30 m Conus Albers grid with
-                  the official class colors.
+                - **Land cover**: [Annual NLCD Collection 1](https://www.usgs.gov/centers/eros/science/annual-national-land-cover-database)
+                  land cover by the USGS, streamed from the official service behind the
+                  [MRLC](https://www.mrlc.gov/) viewer on its native 30 m Conus Albers grid with the
+                  official class colors. Annual NLCD maps every year from 1985 to the most recent
+                  release with one consistent method (per-pixel change detection over the full Landsat
+                  archive feeding a deep learning classification system), so any two years can be
+                  compared directly. It uses the same 16-class legend and class codes as all earlier
+                  NLCD products, which is what the built-in CN lookup table expects.
 
                 ### References
                 - [USDA Technical Release 55](https://www.hydrocad.net/pdf/TR-55%20Manual.pdf) - Official documentation
-                - [National Land Cover Database](https://www.mrlc.gov/) - Land cover data
+                - [Annual NLCD (National Land Cover Database)](https://www.usgs.gov/centers/eros/science/annual-national-land-cover-database) - USGS land cover data, distributed by the [MRLC Consortium](https://www.mrlc.gov/)
+                - [Annual NLCD Collection 1 Science Product User Guide (LSDS-2103)](https://www.mrlc.gov/sites/default/files/docs/LSDS-2103%20Annual%20National%20Land%20Cover%20Database%20(NLCD)%20Collection%201%20Science%20Product%20User%20Guide%20-v1.2%202026_04_21.pdf) - Product methodology and legend
                 - [USDA Soil Data Access](https://sdmdataaccess.nrcs.usda.gov/) - SSURGO soil database query service
                 - [HEC-HMS CN Grid Guide](https://www.hec.usace.army.mil/confluence/hmsdocs/hmsguides/gis-tools-and-terrain-data/gis-tutorials-and-guides/creating-a-curve-number-grid-and-computing-subbasin-average-curve-number-values) - Technical guide
                 - [SSURGO Soil Data Downloader](https://www.arcgis.com/apps/View/index.html?appid=cdc49bd63ea54dd2977f3f2853e07fff) - Soil data source

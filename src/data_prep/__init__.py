@@ -1,22 +1,23 @@
 """
 Data Preparation Package
-Optional workflow that downloads and processes soil (SSURGO) and NLCD land
-cover data for a watershed, producing zipped shapefiles ready to import in
-the CN workflow plus downloadable rasters and a preview map.
+Optional workflow that downloads and processes soil (SSURGO) and Annual
+NLCD land cover data for a watershed, producing zipped shapefiles ready to
+import in the CN workflow plus downloadable rasters and a preview map.
 
 Modules
 -------
 common   : shared helpers (HTTP with VPN certificate fallback, AOI, exports)
 soil     : SSURGO soil polygons with hydrologic groups via USDA Soil Data Access
-nlcd     : NLCD land cover via the official MRLC Web Coverage Service
+nlcd     : Annual NLCD land cover via the official USGS/MRLC service
 prep_map : interactive preview map of the prepared layers
+report   : in-tab HTML summary of the prepared layers
 """
 
 from .common import BOUNDARY_BUFFER_M, PREP_CELL_SIZE, PREP_CRS
 from .nlcd import (
-    ANNUAL_FALLBACK_YEARS,
     FALLBACK_YEARS,
     NLCD_ATTRIBUTION,
+    NLCD_CITATION,
     NLCD_CLASSES,
     NLCD_COLORS,
     NLCD_DATASET_URL,
@@ -39,9 +40,9 @@ __all__ = [
     "BOUNDARY_BUFFER_M",
     "PREP_CELL_SIZE",
     "PREP_CRS",
-    "ANNUAL_FALLBACK_YEARS",
     "FALLBACK_YEARS",
     "NLCD_ATTRIBUTION",
+    "NLCD_CITATION",
     "NLCD_CLASSES",
     "NLCD_COLORS",
     "NLCD_DATASET_URL",

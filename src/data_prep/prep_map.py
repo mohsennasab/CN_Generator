@@ -218,7 +218,7 @@ def create_prep_map(
         </div>
         <div style="font-size: 12px; padding: 6px 2px 4px 2px; text-align: center;
                     color: var(--body-text-color-subdued, #666);">
-            Land cover: National Land Cover Database, USGS / MRLC Consortium.
+            Land cover: Annual NLCD Collection 1, USGS / MRLC Consortium.
             Soils: SSURGO Database, USDA-NRCS Soil Data Access.
         </div>
     </div>

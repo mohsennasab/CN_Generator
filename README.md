@@ -102,7 +102,7 @@ The script zips the package with .NET so that the hidden `_internal` folder is i
 
 ## Features
 
-- Optionally download and prepare the input data automatically: SSURGO soil polygons with hydrologic soil groups from USDA Soil Data Access, and NLCD land cover from the official MRLC service, clipped to your watershed and ready to use.
+- Optionally download and prepare the input data automatically: SSURGO soil polygons with hydrologic soil groups from USDA Soil Data Access, and Annual NLCD land cover (any year from 1985 to the most recent release) from the official USGS service, clipped to your watershed and ready to use.
 - Upload soil and land use datasets and compute CN polygons and a CN raster.
 - Use the built-in NLCD lookup or provide a custom CSV lookup table.
 - Automatically handle CRS mismatch and dual hydrologic groups such as `A/D`, `B/D`, and `C/D`.
@@ -119,14 +119,14 @@ The Data Preparation tab (tab 2) can download and process the soil and land use 
 What it does:
 
 - **Soil data**: queries USDA-NRCS Soil Data Access, the official live service for the SSURGO database, and downloads the soil map unit polygons that intersect your watershed together with the dominant-condition hydrologic soil group field (`hydgrpdcd`: A, B, C, D, and dual groups such as A/D). The polygons are saved as a zipped shapefile and also rasterized to a 30 m hydrologic soil group GeoTIFF you can download.
-- **Land use data**: downloads NLCD land cover from the official services on its native 30 m Conus Albers grid, clipped to your watershed, with the official NLCD colors embedded in the GeoTIFF. The grid is also converted to land use polygons with the standard NLCD codes (`gridcode`) and saved as a zipped shapefile. The year is picked from a dropdown covering 1985 through the most recent release: years 2001-2021 come from the NLCD epoch releases on the MRLC service, and all other years, including the newest, come from Annual NLCD Collection 1 on the USGS service behind the MRLC viewer. The dropdown labels which product each year uses, the year lists are read live from both services when the app starts so new releases appear automatically, and if the primary service for a year is down the app falls back to the other one when it also offers that year.
+- **Land use data**: downloads Annual NLCD Collection 1 land cover from the official USGS service behind the MRLC viewer, on its native 30 m Conus Albers grid, clipped to your watershed, with the official NLCD colors embedded in the GeoTIFF. The grid is also converted to land use polygons with the standard NLCD codes (`gridcode`) and saved as a zipped shapefile. The year is picked from a dropdown covering 1985 through the most recent release (currently 2025). Annual NLCD maps every year with one consistent method, so any two years can be compared directly, and it uses the same 16-class legend and class codes as all earlier NLCD products. The year list is read live from the service when the app starts, so new releases appear automatically.
 - Both layers are clipped to the watershed plus a small 90 m buffer, so the soil and land use intersection in the CN workflow fully covers every boundary cell. The final CN raster is still clipped exactly to the boundary.
 - When preparation finishes, the two zipped shapefiles are loaded into the CN workflow (tab 3) automatically, the field mappings are already correct (`hydgrpdcd` and `gridcode`), and a preview map shows the land cover, the soil groups, and the watershed boundary as toggleable layers.
 - All prepared files, plus a dated log, are saved to a `DataPrep` subfolder inside `Results` so you can reuse them later without downloading again.
 
 A few things worth knowing:
 
-- Data preparation needs an internet connection. Soil data covers the United States and territories (SSURGO); NLCD land cover covers the conterminous United States.
+- Data preparation needs an internet connection. Soil data covers the United States and territories (SSURGO); Annual NLCD land cover covers the conterminous United States.
 - Large watersheds are downloaded in small chunks with visible progress, so the app stays responsive. Very large areas are refused with a clear message instead of exhausting memory; the practical limits are far beyond a typical HUC8 watershed.
 - On corporate VPNs that inspect secure traffic, downloads retry once with certificate verification turned off, the same fallback the GCN10 reader uses, and the retry is recorded in the log.
 - Some SSURGO map units (often water bodies, urban land, or pits) have no hydrologic group. They are kept in the soil layer and reported by the CN workflow as missing hydrogroups, never guessed.
@@ -165,7 +165,7 @@ Citation: Azzam, M. A., Cho, H., 2026. GCN10: An MPI-parallelized framework for 
 
 ## Processing Overview
 
-0. Optional: download and prepare the soil and land use layers automatically in the Data Preparation tab (SSURGO soils via Soil Data Access, NLCD land cover via the MRLC service), clipped to the watershed plus a 90 m buffer.
+0. Optional: download and prepare the soil and land use layers automatically in the Data Preparation tab (SSURGO soils via Soil Data Access, Annual NLCD land cover via the official USGS service), clipped to the watershed plus a 90 m buffer.
 1. Validate uploaded soil, land use, and optional watershed files.
 2. Load geospatial layers with GeoPandas.
 3. Load the built-in NLCD lookup table or a custom CSV lookup.
@@ -226,9 +226,11 @@ This software is provided as-is, without warranty of any kind. Always verify res
 
 ## References
 
-- USDA NRCS SCS Curve Number method
+- USDA NRCS SCS Curve Number method (Technical Release 55)
 - USACE HEC-HMS guidance for CN grids
-- National Land Cover Database
+- Annual NLCD (National Land Cover Database) Collection 1, U.S. Geological Survey, distributed by the MRLC Consortium, https://www.mrlc.gov/
+- Annual NLCD Collection 1 Science Product User Guide, LSDS-2103, USGS EROS
+- Soil Survey Geographic (SSURGO) Database, USDA-NRCS Soil Data Access, https://sdmdataaccess.nrcs.usda.gov/
 - GCN10 -- Global 10 m Curve Number Dataset (Azzam et al.), https://hydro.nmsu.edu/datasets/gcn10/, ODbL v1.0
 - Azzam, M. A., Cho, H., 2026. GCN10: An MPI-parallelized framework for processing global curve number rasters for hydrologic modeling. SoftwareX 34, 102725
 - GeoPandas, Rasterio, rasterstats, Folium, and Gradio
